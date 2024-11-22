@@ -103,6 +103,7 @@ def get_galaxy_data(part_cat, group_cat, fof_idx=-1, sub_idx=-1):
     Returns
       new_part_cat  - a new dictionary with keys from part_cat but data only for the specified galaxy
       new_group_cat - a new dictionary with keys from group_cat but data only for the specified galaxy
+    to remove subhaloes, set sub_idx to 0
     """
     
     if fof_idx < 0 and sub_idx < 0:
@@ -236,7 +237,7 @@ def load_zoom_particle_data(snap_path, group_path, box, snap, part_type, key_lis
     prt_cat, fof_cat = get_galaxy_data(part_cat, grp_cat, mw_idx)
     return prt_cat, fof_cat
 
-def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type):
+def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type, no_subs=True, verbose=1):
     '''take in the snapshot path, the group path, the number box that you want
     the snapshot of, the snapshot number (i.e. what time, here z ~ 0 = 90), 
     the particle type, and the list of keys you want to load
@@ -246,6 +247,8 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type)
                    3 - tracers (not used in DREAMS)
                    4 - stars
                    5 - black holes
+    this is not currently set up to work with z > 0! 
+    note - 
     '''
     if snap==90:
         h = .6909
@@ -281,12 +284,27 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type)
 
     dat = pynbody.load(path)
     offsets = np.sum(grp_cat['GroupLenType'][:mw_idx],axis=0)
-    num_parts = grp_cat['GroupLenType'][mw_idx]
-    print(num_parts)
+    if no_subs == True:
+        print('removing subhaloes')
+        num_parts = grp_cat['SubhaloLenType'][0]
+        nsubs = 1
+        sub_start = 0
+    
+    else:
+        num_parts = grp_cat['GroupLenType'][mw_idx]
+        nsubs = grp_cat['GroupNsubs'][mw_idx]
+        sub_start = grp_cat['GroupFirstSub'][mw_idx]
+
+
     nsubs = grp_cat['GroupNsubs'][mw_idx]
     sub_start = grp_cat['GroupFirstSub'][mw_idx]
-    print(nsubs)
     pt = int(part_type)
+
+    if verbose > 1:
+        print('offsets', offsets)
+        print('sub_start', sub_start)
+        print('nsubs', nsubs)
+        print('num_parts', num_parts)
 
     new_group_cat = dict()
     for key in grp_cat:
