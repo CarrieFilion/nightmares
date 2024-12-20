@@ -258,23 +258,8 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         print('not z = 0 - need to revise!')
         return None
     print('loading in ')
-    if part_type == 0:
-        print(' gas particles for snapshot ', snap, 
-        ' of box ', box)
-    elif part_type == 1:
-        print(' high res dark matter particles for snapshot ', snap, 
-        ' of box ', box)
-    elif part_type == 2:
-        print(' low res dark matter particles for snapshot ', snap, 'of box ', box)
-    elif part_type == 3:
-        print(' tracers particles for snapshot ', snap, 'of box ', box, ' NOT USED IN DREAMS')
-    elif part_type == 4:
-        print(' star particles for snapshot ', snap, 'of box ', box)
-    elif part_type == 5:
-        print(' black hole particles for snapshot ', snap, 'of box ', box)
-    else:
-        print('invalid particle type')
-        return None
+
+
     path = f'{snap_path}/box_{box}/snap_{snap:03}.hdf5'
     fof_path = f'{group_path}/box_{box}/fof_subhalo_tab_{snap:03}.hdf5'
     grp_cat = load_group_data(fof_path, ['GroupLenType', 'GroupFirstSub', 'GroupNsubs', 'GroupMassType', 'GroupPos', 'SubhaloLenType', 'SubhaloGrNr'])
@@ -316,6 +301,8 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
     dat['pos'] = dat['pos'] - new_group_cat['GroupPos']
 
     if part_type == 0:
+        print('loading gas particles for snapshot ', snap, 
+        ' of box ', box)
         gas = pynbody.new(gas=len(dat.gas['pos'][offsets[pt]:offsets[pt]+num_parts[pt]]))
         for key in dat.gas.loadable_keys():
             gas[key] = dat.gas[key][offsets[pt]:offsets[pt]+num_parts[pt]]
@@ -323,6 +310,8 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
                 gas[key].units = units.Unit(1)
         return gas, new_group_cat
     elif part_type == 1:
+        print('loading high res dark matter particles for snapshot ', snap, 
+        ' of box ', box)
         dm = pynbody.new(dm = len(dat.dm['pos'][offsets[pt]:offsets[pt]+num_parts[pt]]))
         for key in dat.dm.loadable_keys():
             dm[key] = dat.dm[key][offsets[pt]:offsets[pt]+num_parts[pt]]
@@ -330,6 +319,7 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
                 dm[key].units = units.Unit(1)
         return dm, new_group_cat
     elif part_type == 2:
+        print('loading low res dark matter particles for snapshot ', snap, 'of box ', box)
         dm = pynbody.new(dm = len(dat.dm['pos'][offsets[pt]:offsets[pt]+num_parts[pt]]))
         for key in dat.dm.loadable_keys():
             dm[key] = dat.dm[key][offsets[pt]:offsets[pt]+num_parts[pt]]
@@ -342,18 +332,25 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
     elif part_type == 3:
         print(' tracers particles for snapshot ', snap, 'of box ', box, ' NOT USED IN DREAMS')
     elif part_type == 4:
-        star = pynbody.new(len(dat.star['pos'][offsets[pt]:offsets[pt]+num_parts[pt]]))
+        print('loading star particles for snapshot ', snap, 'of box ', box)
+        star = pynbody.new(star=len(dat.star['pos'][offsets[pt]:offsets[pt]+num_parts[pt]]))
         for key in dat.star.loadable_keys():
             star[key] = dat.star[key][offsets[pt]:offsets[pt]+num_parts[pt]]
             if star[key].units == 1.00e+00 or star[key].units == units.NoUnit():
                 star[key].units = units.Unit(1)
         return star, new_group_cat
     elif part_type == 5:
-        blackhole = pynbody.new(dat.blackhole[key][offsets[pt]:offsets[pt]+num_parts[pt]])
-        for key in dat.blackhole.loadable_keys():
-            blackhole[key] = dat.blackhole[key][offsets[pt]:offsets[pt]+num_parts[pt]]
-            if blackhole[key].units == 1.00e+00 or blackhole[key].units == units.NoUnit():
-                blackhole[key].units = units.Unit(1)
-            return blackhole, new_group_cat
+        print('loading black hole particles for snapshot ', snap, 'of box ', box)
+        print('we cant do black holes yet, sorry!') #we /could/ do black holes, just need
+        #to reconfigure pynbody to recognize them as a particle type
+        #blackhole = pynbody.new(bh = len(dat.bh[key][offsets[pt]:offsets[pt]+num_parts[pt]]))
+        #for key in dat.blackhole.loadable_keys():
+        #    blackhole[key] = dat.blackhole[key][offsets[pt]:offsets[pt]+num_parts[pt]]
+        #    if blackhole[key].units == 1.00e+00 or blackhole[key].units == units.NoUnit():
+        #        blackhole[key].units = units.Unit(1)
+        #    return blackhole, new_group_cat
+    else:
+        print('invalid particle type')
+        return None
 
     return 
