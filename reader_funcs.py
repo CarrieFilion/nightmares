@@ -237,6 +237,41 @@ def load_zoom_particle_data(snap_path, group_path, box, snap, part_type, key_lis
     prt_cat, fof_cat = get_galaxy_data(part_cat, grp_cat, mw_idx)
     return prt_cat, fof_cat
 
+def load_particle_data_alt(path, part_types):
+    """
+    Read particle data from the DREAMS simulations
+    
+    Inputs
+      path - the absolute or relative path to the hdf5 file you want to read from
+      keys - the data that you want to read from the simulation 
+             see https://www.tng-project.org/data/docs/specifications/ for a list of available data)
+      part_types - which particle types to load.
+                   0 - gas
+                   1 - high res dark matter
+                   2 - low res dark matter
+                   3 - tracers (not used in DREAMS)
+                   4 - stars
+                   5 - black holes
+      
+    Returns
+      cat - a dictionary that contains all of the particle information for the specified keys and particle types
+    """
+    cat = dict()
+    with h5py.File(path) as ofile:
+        
+        if type(part_types) == type(0):
+            part_types = [part_types]
+        
+        for pt in part_types:
+            keys = ofile[f'PartType{pt}'].keys()
+            for key in keys:
+                if pt == 1 and key == 'Masses':
+                    cat[f'PartType{pt}/{key}'] = np.ones(ofile['PartType1/ParticleIDs'].shape)*ofile['Header'].attrs['MassTable'][1]
+                else:
+                    if f'PartType{pt}/{key}' in ofile:
+                        cat[f'PartType{pt}/{key}'] = np.array(ofile[f'PartType{pt}/{key}'])
+    return cat
+
 def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type, no_subs=True, verbose=1):
     '''take in the snapshot path, the group path, the number box that you want
     the snapshot of, the snapshot number (i.e. what time, here z ~ 0 = 90), 
@@ -250,10 +285,24 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
     this is not currently set up to work with z > 0! 
     note - 
     '''
+    #need to set cosmolical parameters
+
     if snap==90:
-        h = .6909
+        #read in the IC file that has the cosmological parameters, update the particle reader with right cosmology
+        param_info = np.loadtxt(f'{snap_path}/box_{box}/aux_files/ics_config.txt',  dtype='str', skiprows=20, max_rows=6)
+        param_dic = {}
+        for i in range(len(param_info)):
+            param_dic[param_info[i][0]] = param_info[i][2]
+        param_dic
+        pynbody.config['omegaM0'] = float(param_dic['Omega_m'])
+        pynbody.config['omegaL0'] = float(param_dic['Omega_L'])
+        pynbody.config['h'] = float(param_dic['H0'])/100 #should be .6909, but file gives 69.09
+        pynbody.config['omegaB0'] = float(param_dic['Omega_b'])
+        pynbody.config['sigma8'] = float(param_dic['sigma_8'])
+        pynbody.config['ns'] = float(param_dic['nspec'])
         pynbody.units.h = h
         pynbody.units.a = 1
+    
     else:
         print('not z = 0 - need to revise!')
         return None
@@ -267,7 +316,8 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
     mw_idx = get_MW_idx(grp_cat) 
 
 
-    dat = pynbody.load(path)
+    dat = load_particle_data_alt(path, part_type)
+    name_map = pynbody.snapshot.namemapper.AdaptiveNameMapper('gadgethdf-name-mapping',return_all_format_names=False)
     offsets = np.sum(grp_cat['GroupLenType'][:mw_idx],axis=0)
     if no_subs == True:
         print('removing subhaloes')
@@ -298,46 +348,91 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         else:
             new_group_cat[key] = grp_cat[key][sub_start:sub_start+nsubs]
 
-    dat['pos'] = dat['pos'] - new_group_cat['GroupPos']
-
+    dat[f'PartType{pt}/Coordinates'] = dat[f'PartType{pt}/Coordinates'] - new_group_cat['GroupPos']
+    unit_dict = {'BirthPos': units.kpc * units.h**-1,
+            'BirthVel': units.a**1/2 * units.km * units.s**-1,
+            'Coordinates': units.kpc * units.h**-1,
+            'GFM_InitialMass': 1e10 * units.Msol * units.h**-1,
+            'GFM_Metallicity': units.Unit(1),
+            'GFM_Metals': units.Unit(1),
+            'GFM_MetalsTagged': units.Unit(1),
+            'GFM_StellarFormationTime': units.Unit(1),
+            'GFM_StellarPhotometrics': units.Unit(1),
+            'Masses': 1e10 * units.Msol * units.h**-1,
+            'ParticleIDs': units.Unit(1),
+            'Potential': units.km**2 * units.s**-2 * units.a**-1,
+            'SubfindDMDensity': 1e10 * units.Msol * units.h**2 * units.kpc**-3,
+            'SubfindDensity': 1e10 * units.Msol * units.h**2 * units.kpc**-3,
+            'SubfindHsml': units.kpc * units.h**-1,
+            'SubfindVelDisp': units.km * units.s**-1,
+            'Velocities': units.km * units.a**1/2 * units.s**-1,
+            'CenterOfMass': units.kpc * units.h**-1,
+            'Density': 1e10 * units.Msol * units.h**2 * units.kpc**-3,
+            'ElectronAbundance': units.Unit(1),
+            'GFM_AGNRadiation': units.erg * units.s**-1 * units.cm**-2 * 4 * np.pi,
+            'GFM_CoolingRate': units.erg * units.s**-1 * units.cm**3,
+            'GFM_Metallicity': units.Unit(1),
+            'GFM_Metals': units.Unit(1),
+            'GFM_MetalsTagged': units.Unit(1),
+            'GFM_WindDMVelDisp': units.km * units.s**-1,
+            'GFM_WindHostHaloMass': 1e10 * units.Msol * units.h**-1,
+            'InternalEnergy': units.km**2 * units.s**-2,
+            'MagneticField': units.h * units.a**-2 * 1e5 * units.Msol**1/2 * units.kpc**-1/2* units.km * units.s**-1 * units.kpc**-1,
+            'MagneticFieldDivergence': units.h**3 * units.a**-2 * 1e5 * units.Msol**1/2 * units.km * units.s**-1 * units.kpc**-5/2,
+            'NeutralHydrogenAbundance': units.Unit(1),
+            'StarFormationRate': units.Msol * units.yr**-1,
+            'InternalEnergy': units.km**2 * units.s**-2,
+            'AllowRefinement': units.Unit(1),
+            'HighResGasMass': units.Unit(1)} #high res gas mass isn't defined in the tng webpage, gonna just set unit to one
     if part_type == 0:
         print('loading gas particles for snapshot ', snap, 
         ' of box ', box)
-        gas = pynbody.new(gas=len(dat.gas['pos'][offsets[pt]:offsets[pt]+num_parts[pt]]))
-        for key in dat.gas.loadable_keys():
-            gas[key] = dat.gas[key][offsets[pt]:offsets[pt]+num_parts[pt]]
-            if gas[key].units == 1.00e+00 or gas[key].units == units.NoUnit():
-                gas[key].units = units.Unit(1)
+        gas = pynbody.new(gas=len(dat[f'PartType{pt}/Masses'][offsets[pt]:offsets[pt]+num_parts[pt]]))
+        for key in dat.keys():
+            key = key.split('/')[1]
+            uni = unit_dict[key]
+            mapped_name = name_map(key, reverse=True)
+            gas[mapped_name] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
+            gas[mapped_name].units = unit_dict[key]
         return gas, new_group_cat
     elif part_type == 1:
         print('loading high res dark matter particles for snapshot ', snap, 
         ' of box ', box)
-        dm = pynbody.new(dm = len(dat.dm['pos'][offsets[pt]:offsets[pt]+num_parts[pt]]))
-        for key in dat.dm.loadable_keys():
-            dm[key] = dat.dm[key][offsets[pt]:offsets[pt]+num_parts[pt]]
-            if dm[key].units == 1.00e+00 or dm[key].units == units.NoUnit():
-                dm[key].units = units.Unit(1)
+        dm = pynbody.new(dm = len(dat[f'PartType{pt}/ParticleIDs'][offsets[pt]:offsets[pt]+num_parts[pt]]))
+        for key in dat.keys():
+            key = key.split('/')[1]
+            dm[key] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
+            if key == 'Masses':
+                with h5py.File(path) as ofile:
+                    dm['Masses'] = np.ones([f'PartType{pt}/Coordinates'].shape[0])*ofile['Header'].attrs['MassTable'][1]
+            uni = unit_dict[key]
+            mapped_name = name_map(key, reverse=True)
+            dm[mapped_name] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
+            dm[mapped_name].units = unit_dict[key]
         return dm, new_group_cat
     elif part_type == 2:
         print('loading low res dark matter particles for snapshot ', snap, 'of box ', box)
-        dm = pynbody.new(dm = len(dat.dm['pos'][offsets[pt]:offsets[pt]+num_parts[pt]]))
-        for key in dat.dm.loadable_keys():
-            dm[key] = dat.dm[key][offsets[pt]:offsets[pt]+num_parts[pt]]
-            if key == 'Masses':
-                with h5py.File(path) as ofile:
-                    dm['Masses'] = np.ones(dat.dm['pos'].shape[0])*ofile['Header'].attrs['MassTable'][1]
-            if dm[key].units == 1.00e+00 or dm[key].units == units.NoUnit():
-                dm[key].units = units.Unit(1)
+        print('are you sure that you want this component?')
+        dm = pynbody.new(dm = len(dat[f'PartType{pt}/ParticleIDs'][offsets[pt]:offsets[pt]+num_parts[pt]]))
+        for key in dat.keys():
+            key = key.split('/')[1]
+            dm[key] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
+            uni = unit_dict[key]
+            mapped_name = name_map(key, reverse=True)
+            dm[mapped_name] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
+            dm[mapped_name].units = unit_dict[key]
         return dm, new_group_cat
     elif part_type == 3:
         print(' tracers particles for snapshot ', snap, 'of box ', box, ' NOT USED IN DREAMS')
     elif part_type == 4:
         print('loading star particles for snapshot ', snap, 'of box ', box)
-        star = pynbody.new(star=len(dat.star['pos'][offsets[pt]:offsets[pt]+num_parts[pt]]))
-        for key in dat.star.loadable_keys():
-            star[key] = dat.star[key][offsets[pt]:offsets[pt]+num_parts[pt]]
-            if star[key].units == 1.00e+00 or star[key].units == units.NoUnit():
-                star[key].units = units.Unit(1)
+        star = pynbody.new(star=len(dat[f'PartType{pt}/Masses'][offsets[pt]:offsets[pt]+num_parts[pt]]))
+        for key in dat.keys():
+            key = key.split('/')[1]
+            uni = unit_dict[key]
+            mapped_name = name_map(key, reverse=True)
+            star[mapped_name] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
+            star[mapped_name].units = unit_dict[key]
         return star, new_group_cat
     elif part_type == 5:
         print('loading black hole particles for snapshot ', snap, 'of box ', box)
