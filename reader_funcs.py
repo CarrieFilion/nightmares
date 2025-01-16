@@ -272,7 +272,7 @@ def load_particle_data_alt(path, part_types):
                         cat[f'PartType{pt}/{key}'] = np.array(ofile[f'PartType{pt}/{key}'])
     return cat
 
-def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type, no_subs=True, verbose=1):
+def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type, verbose=1):
     '''take in the snapshot path, the group path, the number box that you want
     the snapshot of, the snapshot number (i.e. what time, here z ~ 0 = 90), 
     the particle type, and the list of keys you want to load
@@ -283,9 +283,8 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
                    4 - stars
                    5 - black holes
     this is not currently set up to work with z > 0! 
-    note - 
+    note - always removing subhaloes
     '''
-    #need to set cosmolical parameters
 
     if snap==90:
         #read in the IC file that has the cosmological parameters, update the particle reader with right cosmology
@@ -315,24 +314,14 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
 
     mw_idx = get_MW_idx(grp_cat) 
 
-
-    dat = load_particle_data_alt(path, part_type)
     name_map = pynbody.snapshot.namemapper.AdaptiveNameMapper('gadgethdf-name-mapping',return_all_format_names=False)
     offsets = np.sum(grp_cat['GroupLenType'][:mw_idx],axis=0)
-    if no_subs == True:
-        print('removing subhaloes')
-        num_parts = grp_cat['SubhaloLenType'][0]
-        nsubs = 1
-        sub_start = 0
     
-    else:
-        num_parts = grp_cat['GroupLenType'][mw_idx]
-        nsubs = grp_cat['GroupNsubs'][mw_idx]
-        sub_start = grp_cat['GroupFirstSub'][mw_idx]
-
-
-    nsubs = grp_cat['GroupNsubs'][mw_idx]
-    sub_start = grp_cat['GroupFirstSub'][mw_idx]
+    print('removing subhaloes')
+    num_parts = grp_cat['SubhaloLenType'][0]
+    nsubs = 1
+    sub_start = 0 
+    
     pt = int(part_type)
 
     if verbose > 1:
@@ -341,6 +330,7 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         print('nsubs', nsubs)
         print('num_parts', num_parts)
 
+    dat = load_particle_data_alt(path, pt)
     new_group_cat = dict()
     for key in grp_cat:
         if 'Group' in key:
@@ -390,7 +380,6 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         gas = pynbody.new(gas=len(dat[f'PartType{pt}/Masses'][offsets[pt]:offsets[pt]+num_parts[pt]]))
         for key in dat.keys():
             key = key.split('/')[1]
-            uni = unit_dict[key]
             mapped_name = name_map(key, reverse=True)
             gas[mapped_name] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
             gas[mapped_name].units = unit_dict[key]
@@ -399,13 +388,14 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         print('loading high res dark matter particles for snapshot ', snap, 
         ' of box ', box)
         dm = pynbody.new(dm = len(dat[f'PartType{pt}/ParticleIDs'][offsets[pt]:offsets[pt]+num_parts[pt]]))
+        with h5py.File(path) as ofile:
+            dm['Masses'] = np.ones(ofile['PartType1/ParticleIDs'][offsets[pt]:offsets[pt]+num_parts[pt]].shape)*ofile['Header'].attrs['MassTable'][1]
+            mapped_name = name_map('Masses', reverse=True)
+            dm[mapped_name].units = unit_dict['Masses']
+            dm[mapped_name] = np.ones(ofile['PartType1/ParticleIDs'][offsets[pt]:offsets[pt]+num_parts[pt]].shape)*ofile['Header'].attrs['MassTable'][1]
         for key in dat.keys():
             key = key.split('/')[1]
             dm[key] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
-            if key == 'Masses':
-                with h5py.File(path) as ofile:
-                    dm['Masses'] = np.ones([f'PartType{pt}/Coordinates'].shape[0])*ofile['Header'].attrs['MassTable'][1]
-            uni = unit_dict[key]
             mapped_name = name_map(key, reverse=True)
             dm[mapped_name] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
             dm[mapped_name].units = unit_dict[key]
@@ -417,7 +407,6 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         for key in dat.keys():
             key = key.split('/')[1]
             dm[key] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
-            uni = unit_dict[key]
             mapped_name = name_map(key, reverse=True)
             dm[mapped_name] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
             dm[mapped_name].units = unit_dict[key]
@@ -429,7 +418,6 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         star = pynbody.new(star=len(dat[f'PartType{pt}/Masses'][offsets[pt]:offsets[pt]+num_parts[pt]]))
         for key in dat.keys():
             key = key.split('/')[1]
-            uni = unit_dict[key]
             mapped_name = name_map(key, reverse=True)
             star[mapped_name] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
             star[mapped_name].units = unit_dict[key]
