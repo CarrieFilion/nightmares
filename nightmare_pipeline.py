@@ -38,9 +38,9 @@ def half_mass(snapshot, verbosity = 3):
     half_mass_idx = np.argmin(np.abs(cumulative_mass - half_mass))
     half_mass_radius = np.sort(R)[half_mass_idx]
     if verbosity > 0:
-        print('total mass', np.sum(mass))
-        print('half mass', half_mass)
-        print(np.sort(R)[half_mass_idx], ' half mass radius')
+        print('total stellar mass', np.sum(mass))
+        print('half stellar mass', half_mass)
+        print(np.sort(R)[half_mass_idx], ' half (stellar) mass radius')
         fig, (ax1, ax2) = plt.subplots(1,2, figsize=(12,6))
         ax1.plot(np.sort(R), cumulative_mass)
         ax1.axvline(np.sort(R)[half_mass_idx])    
@@ -106,7 +106,7 @@ def disk_bulge_xyz_log(rr, a, h, herna, Mfac, rho0):
     sh = 1.0/np.cosh(z/h)
     d1 = 0.25*Mfac/(np.pi*a*a*h) * np.exp(-R/a) * sh * sh
     d2 = (1-Mfac)*herna**4/(2.0*np.pi*rr)*(rr+herna)**(-3.0)
-    return np.log10(d1) + np.log10(d2) + rho0;
+    return np.log10(d1 + d2) + rho0;
 
 ## could do like z being integrated quantity, s
 def density_residual(theta, xyz_array, real_density):
@@ -147,11 +147,12 @@ def j_circ_func(dat, bins=25, smoothing_size = 3, verbose=3):
     return j_circs
 
 #%%
+
 #%%
 #ok box 0 seems to be in box_0/box_0 ....?
 box = 999      #which simulation is used [0,1023] ---- 999 is beautiful boxy-peanut bulge! + spiral!
 #23 is suuuper warped and ends up being round label, 28 is a bit warped, 32 is basically all bulge and tiny disk
-#91 and 15 is no disk. 5 is nice, 672 is supre nice n disky. 537 is big bulge
+#91 and 15 is no disk. 5 is nice, 672 is supre nice n disky. 537 is big bulge. 99 wack
 snap = 90     #which snapshot 90 -> z=0; will work up to z~1 as written
 part_type = 4 #which particle type to calculate the density
 h = .6909     #reduced hubble constant (do not change)
@@ -173,6 +174,8 @@ print('rotation metric, 0.4 and higher have high fraction of mass that rotates a
       compute_rotation_metric(dat, half_mass_radius))
 print('computing Jcirc')
 jcirc = j_circ_func(dat, bins=25, smoothing_size = 3)
+#%%
+plt.scatter(dat['x'], dat['y'], s=.1, c='k')
 #%%
 #some nice plots to inspect
 disky = (np.sqrt(dat['x']**2 + dat['y']**2) < 30)&(np.abs(dat['z']) < 5) # just r, z cut
@@ -200,9 +203,13 @@ bulge_mask = (dat['jz']/jcirc<0.1)&(dat['r']<5)
 disk_mask = (dat['jz']/jcirc>0.6)&(dat['x']**2+dat['y']**2<30**2)&(np.abs(dat['z'])<5)&(dat['rxy']>2)
 fig, (ax1, ax2) = plt.subplots(2,2, figsize=(12,12))
 ax1[0].scatter(dat['x'][bulge_mask], dat['y'][bulge_mask], s=.01, c='purple')
+ax1[0].set(xlabel='x (kpc)', ylabel='y (kpc)', title='Bulge')
 ax1[1].scatter(dat['x'][bulge_mask], dat['z'][bulge_mask], s=.01, c='purple')
+ax1[1].set(xlabel='x (kpc)', ylabel='z (kpc)', title='Bulge')
 ax2[0].scatter(dat['x'][disk_mask], dat['y'][disk_mask], s=.01, c='k')
+ax2[0].set(xlabel='x (kpc)', ylabel='y (kpc)', title='Disk')
 ax2[1].scatter(dat['x'][disk_mask], dat['z'][disk_mask], s=.01, c='k')
+ax2[1].set(xlabel='x (kpc)', ylabel='z (kpc)', title='Disk')
 #%%
 #fit the disk in r, z and hernquist in R
 mass_r, rbins, num = stats.binned_statistic(dat['rxy'][disk_mask],
@@ -246,17 +253,17 @@ fig, (ax1, ax2, ax3) = plt.subplots(1,3,figsize=(15,5))
 ax1.scatter(rcens, (ring_density_smoo), label='Data')
 ax1.plot(rcens, exponential_disk_log(rcens, rexp[0], rexp[1]), 
          label='Fit, scale len '+str(round(rexp[0],2)) + ' rho0 '+str(round(rexp[1],2)), c='r')
-ax1.set(yscale='linear', xlabel='R (kpc)', ylabel='M(r)/A(r) (Msol kpc^-2)')
+ax1.set(yscale='linear', xlabel='R (kpc)', ylabel='log(surface density)')
 ax1.legend()
 ax2.scatter(zcens, z_density_smoo, label='Data')
 ax2.plot(zcens, disk_z_log(zcens, zexp[0], zexp[1]), c='r', 
          label='Fit scale len '+ str(round(zexp[0], 2)) + ' rho0 '+str(round(zexp[1],2)))
-ax2.set(yscale='linear', xlabel='z (kpc)', ylabel='M(r)/A(r) (Msol kpc^-2)')
+ax2.set(yscale='linear', xlabel='z (kpc)', ylabel='log(surface density)')
 ax2.legend()
 ax3.scatter(rrcens, shell_density_smoo, label='Data')
 ax3.plot(rrcens, hernquist_bulge_log(rrcens, bulge[0], bulge[1]), 
          label='Fit herna'+str(round(bulge[0],2)) + ' rho ' + str(round(bulge[1],2)), c='r')
-ax3.set(yscale='linear', xlabel='r (kpc)', ylabel='M(r)/A(r) (Msol kpc^-2)')
+ax3.set(yscale='linear', xlabel='r (kpc)', ylabel='log(density)')
 ax3.legend()
 #%%
 #now doing the full R density, using the disk and bulge fits
@@ -289,4 +296,125 @@ ax1.set(xlabel='R (kpc)', ylabel=' density')
 ax1.legend()
 # %%
 print('final scale length, scale height, hernquist a, mfrac, rho0', np.around(sol['x'],2))
+#%%
+#%%
+halo, extra = load_zoom_particle_data_pynbody(snap_path, group_path, box,
+                                              snap, 1, verbose=3)
+#%%
+pynbody.analysis.center(halo, mode='pot')
+halo.physical_units()
+rvir = pynbody.analysis.halo.virial_radius(halo).item()
+print('virial radius:', rvir)
+#pynbody.plot.profile.rotation_curve(halo)
+p = pynbody.analysis.profile.Profile(halo, min=0.1, max=100)
+plt.plot(p['rbins'], p['v_circ'])
+#%%
+a = round(sol['x'][0]/rvir,2) #is 0.019...
+h = round(sol['x'][1]/rvir, 3)
+hernquist = round(sol['x'][2]/rvir,3)
+Mfac = round(sol['x'][3], 1)
+print(a, h, hernquist, Mfac)
+# %%
+disk_basis_config = f"""
+                id         : cylinder
+                parameters:
+                    acyl: {a}       # The scale length of the exponential disk
+                    hcyl: {h}       # The scale height of the exponential disk
+                    HERNA: {hernquist}       # The scale length of the Hernquist disk
+                    Mfac: {Mfac}       # The mass fraction in disk
+                    dtype: "diskbulge"   # diskbulge dtype
+                    lmaxfid: 72      # The maximum spherical harmonic order for the input basis
+                    nmaxfid: 64      # The radial order for the input spherical basis
+                    mmax: 8          # The maximum azimuthal order for the cylindrical basis
+                    nmax: 18         # The maximum radial order of the cylindrical basis
+                    ncylnx: 256      # The number of grid points in mapped cylindrical radius
+                    ncylny: 128      # The number of grid points in mapped verical scale
+                    ncylodd: 4       # The number of anti-symmetric radial basis functions per azimuthal order m
+                    rnum: 500       # The number of radial integration knots in the inner product
+                    pnum: 1          # The number of azimuthal integration knots (pnum: 0, assume axisymmetric target density)
+                    tnum: 80         # The number of colatitute integration knots
+                    ashift: 0.0      # Target shift length in scale lengths to create more variance
+                    vflag: 16        # Verbosity flag: print diagnostics to stdout for vflag>0
+                    logr: false      # Log scaling in cylindrical radius
+                    cachename : disk_dreams_a{a}_h{h}_herna{hernquist}_f{Mfac}.cache      # The cache file name
+                """
+disk_basis = pyEXP.basis.Basis.factory(disk_basis_config)
+xmin = a/5
+xmax = a*10
+numr = 300
+zmin = -h*10
+zmax = h*10
+numz = 300
+symbasis = disk_basis.getBasis(xmin, xmax, numr, zmin, zmax, numz)
+
+ortho_disk = disk_basis.orthoCheck()
+# Make a table of worst orthgonal checks per harmonic order
+    
+form = '{:>4s}  {:>13s}'
+with open('DREAMS_ortho_disk_test_a{}_h{}_herna{}_f{}.txt'.format(a, h, hernquist, Mfac), 'w') as f:
+    f.write("Disk ortho check")
+    f.write(form.format('l', 'error'))
+    f.write(form.format('-', '-----'))
+    for l in range(len(ortho_disk)):
+        mat = ortho_disk[l]
+        worst = 0.0
+        for i in range(mat.shape[0]):
+            for j in range(mat.shape[1]):
+                if i==j: test = np.abs(1.0 - mat[i, j])
+                else:    test = np.abs(mat[i, j])
+                if test > worst: worst = test
+        f.write('{:4d}  {:13.6e}'.format(l, worst))
+
+R = np.linspace(xmin, xmax, numr)
+Z = np.linspace(zmin, zmax, numz)
+
+xv, yv = np.meshgrid(R, Z)
+fig, (ax) = plt.subplots(5, 12, figsize=(60, 25))
+for m in range(5):
+    for n in range(12):
+        # Tranpose for contourf
+        ax[m][n].contourf(xv, yv, symbasis[m][n]['potential'].transpose())
+        ax[m][n].set_xlabel('R')
+        ax[m][n].set_ylabel('Z')
+        ax[m][n].set_title('m, n={}, {}'.format(m, n))
+        #fig.colorbar(cx, ax=ax[m][n])
+plt.savefig('/mnt/home/cfilion/DREAMS/plots/dreams_a{}_h{}_herna{}_f{}.jpeg'.format(a, h, hernquist, Mfac))
+#%%
+
+#%%
+empirical = symbasis.createFromArray(np.ones(dat['x'][disky]), dat['pos'][disky]/rvir, time=0.0)
+empirical_coefs = pyEXP.coefs.Coefs.makecoefs(empirical, 'disk')# %%
+empirical_volume = np.zeros((50, numr, numz))
+z_sice = np.linspace(zmin, zmax, 50)
+
+for i in range(len(z_sice)):
+    pmin  = [xmin, xmin, z_sice[i]]
+    pmax  = [xmax, xmax, z_sice[i]]
+    grid  = [  100,   100,   0]
+    
+    fields = pyEXP.field.FieldGenerator([0.0], pmin, pmax, grid)
+
+
+    fields = pyEXP.field.FieldGenerator([0.0], pmin, pmax, grid)
+    empirical_surfaces = fields.slices(empirical, empirical_coefs)
+    empirical_volume[i] = empirical_surfaces[0.0]['dens']
+
+fig, ax = plt.subplots(1, 2, figsize=(14, 4), sharey=True)
+
+cb1 = ax[0].hist2d(dat['pos'][disky][:,0], dat['pos'][disky][:,1], bins=600, norm=LogNorm(), cmap='twilight');
+cb3 = ax[2].imshow((np.mean(empirical_volume, axis=0)).T,  cmap='twilight', 
+             origin='lower', extent=[-25, 25, -25, 25], norm=LogNorm())
+
+
+
+
+ax[0].set_xlim(-25, 25)
+ax[0].set_ylim(-25, 25)
+
+fig.colorbar(cb1[3], ax=ax[0])
+fig.colorbar(cb2, ax=ax[1])
+
+#plt.colorbar(img)
+ax[1].set_xlim(-150, 150)
+ax[1].set_ylim(-150, 150)
 # %%

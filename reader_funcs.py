@@ -113,19 +113,22 @@ def get_galaxy_data(part_cat, group_cat, fof_idx=-1, sub_idx=-1):
         fof_idx = group_cat['SubhaloGrNr'][sub_idx]
     
     offsets = np.sum(group_cat['GroupLenType'][:fof_idx],axis=0)
-    
+    sub_start = group_cat['GroupFirstSub'][fof_idx] #index of central halo in group
     if sub_idx >= 1:
-        start_sub = group_cat['GroupFirstSub'][fof_idx]
-        offsets += np.sum(group_cat['SubhaloLenType'][start_sub:start_sub+sub_idx], axis=0)
-    
-    if sub_idx < 0:
+        #specify one specific subhalo
+        sub_loc = sub_start + sub_idx #sub start is index of central, sub_idx is number subhalo in the group
+        nsubs = 1
+        offsets += np.sum(group_cat['SubhaloLenType'][sub_start:sub_loc], axis=0)
+        num_parts = group_cat['SubhaloLenType'][sub_loc]
+    elif sub_idx < 0:
+        #all particles in group, including those not assigned subhalos
         num_parts = group_cat['GroupLenType'][fof_idx]
         nsubs = group_cat['GroupNsubs'][fof_idx]
-        sub_start = group_cat['GroupFirstSub'][fof_idx]
     else:
-        num_parts = group_cat['SubhaloLenType'][sub_idx]
+        #sub_idx == 0 -> only particles in central subhalo of whatever group is specified, 
+        #this effectively removes subhaloes + non-assigned stars from central
+        num_parts = group_cat['SubhaloLenType'][sub_start] 
         nsubs = 1
-        sub_start = sub_idx
     
     
     new_part_cat = dict()
@@ -139,7 +142,10 @@ def get_galaxy_data(part_cat, group_cat, fof_idx=-1, sub_idx=-1):
         if 'Group' in key:
             new_group_cat[key] = group_cat[key][fof_idx]
         else:
-            new_group_cat[key] = group_cat[key][sub_start:sub_start+nsubs]
+            if sub_idx >= 1:
+                new_group_cat[key] = group_cat[key][sub_loc:sub_loc+nsubs]
+            else:
+                new_group_cat[key] = group_cat[key][sub_start:sub_start+nsubs]
     
     return new_part_cat, new_group_cat
 
@@ -292,16 +298,16 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         param_dic = {}
         for i in range(len(param_info)):
             param_dic[param_info[i][0]] = param_info[i][2]
-        param_dic
+        
         pynbody.config['omegaM0'] = float(param_dic['Omega_m'])
         pynbody.config['omegaL0'] = float(param_dic['Omega_L'])
         pynbody.config['h'] = float(param_dic['H0'])/100 #should be .6909, but file gives 69.09
         pynbody.config['omegaB0'] = float(param_dic['Omega_b'])
         pynbody.config['sigma8'] = float(param_dic['sigma_8'])
         pynbody.config['ns'] = float(param_dic['nspec'])
-        pynbody.units.h = h
-        pynbody.units.a = 1
-    
+        pynbody.units.a = 1.0
+        pynbody.units.h = float(param_dic['H0'])/100
+
     else:
         print('not z = 0 - need to revise!')
         return None
@@ -310,7 +316,8 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
 
     path = f'{snap_path}/box_{box}/snap_{snap:03}.hdf5'
     fof_path = f'{group_path}/box_{box}/fof_subhalo_tab_{snap:03}.hdf5'
-    grp_cat = load_group_data(fof_path, ['GroupLenType', 'GroupFirstSub', 'GroupNsubs', 'GroupMassType', 'GroupPos', 'SubhaloLenType', 'SubhaloGrNr'])
+    grp_cat = load_group_data(fof_path, ['GroupLenType', 'GroupFirstSub', 'GroupNsubs', 'GroupMassType', \
+                                         'GroupPos', 'SubhaloLenType', 'SubhaloGrNr', 'SubhaloPos'])
 
     mw_idx = get_MW_idx(grp_cat) 
 
@@ -318,17 +325,30 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
     offsets = np.sum(grp_cat['GroupLenType'][:mw_idx],axis=0)
     
     print('removing subhaloes')
-    num_parts = grp_cat['SubhaloLenType'][0]
+    num_parts = grp_cat['SubhaloLenType'][grp_cat['GroupFirstSub'][mw_idx]] #want sub_idx = 0 in Jonah's code
     nsubs = 1
-    sub_start = 0 
+    sub_start = grp_cat['GroupFirstSub'][mw_idx] #new edit
+
+
     
     pt = int(part_type)
 
+    soft = np.loadtxt(f'{snap_path}/box_{box}/aux_files/parameters-usedvalues',  dtype='str')
+    soft_dict = {}
+    for i in range(len(soft)):
+        soft_dict[soft[i][0]] = soft[i][1]
+    comoving = float(soft_dict['SofteningComovingType'+str(pt)])
+    maxphys = float(soft_dict['SofteningMaxPhysType'+str(pt)])
+    a = 1.0 #bad to hardcode this in, but pynbody complains if I set a in the config
+    if comoving > maxphys/a:
+        comoving = maxphys/a
+        
     if verbose > 1:
         print('offsets', offsets)
         print('sub_start', sub_start)
         print('nsubs', nsubs)
         print('num_parts', num_parts)
+        print('mw_idx, sub_start', mw_idx, sub_start)
 
     dat = load_particle_data_alt(path, pt)
     new_group_cat = dict()
@@ -337,8 +357,11 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
             new_group_cat[key] = grp_cat[key][mw_idx]
         else:
             new_group_cat[key] = grp_cat[key][sub_start:sub_start+nsubs]
+    if verbose > 1:
+        print('-----------------')
+        print('newgroupcat grouppos, subhalopos', new_group_cat['GroupPos'], new_group_cat['SubhaloPos'])
 
-    dat[f'PartType{pt}/Coordinates'] = dat[f'PartType{pt}/Coordinates'] - new_group_cat['GroupPos']
+    dat[f'PartType{pt}/Coordinates'] = dat[f'PartType{pt}/Coordinates'] - new_group_cat['SubhaloPos']
     unit_dict = {'BirthPos': units.kpc * units.h**-1,
             'BirthVel': units.a**1/2 * units.km * units.s**-1,
             'Coordinates': units.kpc * units.h**-1,
@@ -378,6 +401,14 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         print('loading gas particles for snapshot ', snap, 
         ' of box ', box)
         gas = pynbody.new(gas=len(dat[f'PartType{pt}/Masses'][offsets[pt]:offsets[pt]+num_parts[pt]]))
+        #not picked up from config...
+        gas.properties['omegaM0'] = float(param_dic['Omega_m'])
+        gas.properties['omegaL0'] = float(param_dic['Omega_L'])
+        gas.properties['h'] = float(param_dic['H0'])/100 #should be .6909, but file gives 69.09
+        gas.properties['omegaB0'] = float(param_dic['Omega_b'])
+        gas.properties['sigma8'] = float(param_dic['sigma_8'])
+        gas.properties['ns'] = float(param_dic['nspec'])
+        gas['eps'] = pynbody.array.SimArray([comoving], 'kpc', dtype='float64')
         for key in dat.keys():
             key = key.split('/')[1]
             mapped_name = name_map(key, reverse=True)
@@ -388,6 +419,13 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         print('loading high res dark matter particles for snapshot ', snap, 
         ' of box ', box)
         dm = pynbody.new(dm = len(dat[f'PartType{pt}/ParticleIDs'][offsets[pt]:offsets[pt]+num_parts[pt]]))
+        dm.properties['omegaM0'] = float(param_dic['Omega_m'])
+        dm.properties['omegaL0'] = float(param_dic['Omega_L'])
+        dm.properties['h'] = float(param_dic['H0'])/100 #should be .6909, but file gives 69.09
+        dm.properties['omegaB0'] = float(param_dic['Omega_b'])
+        dm.properties['sigma8'] = float(param_dic['sigma_8'])
+        dm.properties['ns'] = float(param_dic['nspec'])
+        dm['eps'] = pynbody.array.SimArray([comoving], 'kpc', dtype='float64')
         with h5py.File(path) as ofile:
             dm['Masses'] = np.ones(ofile['PartType1/ParticleIDs'][offsets[pt]:offsets[pt]+num_parts[pt]].shape)*ofile['Header'].attrs['MassTable'][1]
             mapped_name = name_map('Masses', reverse=True)
@@ -395,7 +433,7 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
             dm[mapped_name] = np.ones(ofile['PartType1/ParticleIDs'][offsets[pt]:offsets[pt]+num_parts[pt]].shape)*ofile['Header'].attrs['MassTable'][1]
         for key in dat.keys():
             key = key.split('/')[1]
-            dm[key] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
+            #dm[key] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
             mapped_name = name_map(key, reverse=True)
             dm[mapped_name] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
             dm[mapped_name].units = unit_dict[key]
@@ -404,9 +442,16 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         print('loading low res dark matter particles for snapshot ', snap, 'of box ', box)
         print('are you sure that you want this component?')
         dm = pynbody.new(dm = len(dat[f'PartType{pt}/ParticleIDs'][offsets[pt]:offsets[pt]+num_parts[pt]]))
+        dm.properties['omegaM0'] = float(param_dic['Omega_m'])
+        dm.properties['omegaL0'] = float(param_dic['Omega_L'])
+        dm.properties['h'] = float(param_dic['H0'])/100 #should be .6909, but file gives 69.09
+        dm.properties['omegaB0'] = float(param_dic['Omega_b'])
+        dm.properties['sigma8'] = float(param_dic['sigma_8'])
+        dm.properties['ns'] = float(param_dic['nspec'])
+        dm['eps'] = pynbody.array.SimArray([comoving], 'kpc', dtype='float64')
         for key in dat.keys():
             key = key.split('/')[1]
-            dm[key] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
+            #dm[key] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
             mapped_name = name_map(key, reverse=True)
             dm[mapped_name] = dat[f'PartType{pt}/{key}'][offsets[pt]:offsets[pt]+num_parts[pt]]
             dm[mapped_name].units = unit_dict[key]
@@ -416,6 +461,13 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
     elif part_type == 4:
         print('loading star particles for snapshot ', snap, 'of box ', box)
         star = pynbody.new(star=len(dat[f'PartType{pt}/Masses'][offsets[pt]:offsets[pt]+num_parts[pt]]))
+        star.properties['omegaM0'] = float(param_dic['Omega_m'])
+        star.properties['omegaL0'] = float(param_dic['Omega_L'])
+        star.properties['h'] = float(param_dic['H0'])/100 #should be .6909, but file gives 69.09
+        star.properties['omegaB0'] = float(param_dic['Omega_b'])
+        star.properties['sigma8'] = float(param_dic['sigma_8'])
+        star.properties['ns'] = float(param_dic['nspec'])
+        star['eps'] = pynbody.array.SimArray([comoving], 'kpc', dtype='float64')
         for key in dat.keys():
             key = key.split('/')[1]
             mapped_name = name_map(key, reverse=True)
