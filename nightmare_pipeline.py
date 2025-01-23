@@ -21,161 +21,58 @@ from inspect import getmembers, isfunction
 from reader_funcs import *
 from scipy.ndimage import uniform_filter1d
 from scipy.optimize import curve_fit, least_squares
+from analysis_functions import *
 # %%
 snap_path = '/mnt/home/dreams/ceph/Sims/CDM/MW_zooms/SB5'
 group_path = '/mnt/home/dreams/ceph/FOF_Subfind/CDM/MW_zooms/SB5/'
 param_path = '/mnt/home/dreams/ceph/Parameters/CDM/MW_zooms/CDM_TNG_MW_SB5.txt'
 #%%
-def sech2(x):
-    return 1/np.cosh(x)**2
-
-def half_mass(snapshot, verbosity = 3):
-    '''compute the half-mass radius from a simulation snapshot'''
-    mass = snapshot['mass']
-    R = np.sqrt(snapshot['x']**2 + snapshot['y']**2 + snapshot['z']**2)
-    cumulative_mass = np.cumsum(mass[np.argsort(R)])
-    half_mass = np.max(cumulative_mass)/2
-    half_mass_idx = np.argmin(np.abs(cumulative_mass - half_mass))
-    half_mass_radius = np.sort(R)[half_mass_idx]
-    if verbosity > 0:
-        print('total stellar mass', np.sum(mass))
-        print('half stellar mass', half_mass)
-        print(np.sort(R)[half_mass_idx], ' half (stellar) mass radius')
-        fig, (ax1, ax2) = plt.subplots(1,2, figsize=(12,6))
-        ax1.plot(np.sort(R), cumulative_mass)
-        ax1.axvline(np.sort(R)[half_mass_idx])    
-        ax1.axhline(half_mass)
-        ax1.axvline(np.sort(R)[half_mass_idx])
-        ax1.set_xlim(0,100)
-        ax2.plot(np.sort(R), cumulative_mass)
-        ax2.axvline(np.sort(R)[half_mass_idx])    
-        ax2.axhline(half_mass)
-        ax2.axvline(np.sort(R)[half_mass_idx])
-    return half_mass_radius, half_mass_idx
-    
-def compute_roundness_metric(snapshot, verbosity=3):
-    '''Computes the roundness metric for a given set of particles
-    mass (array): mass of particles
-    x (array): x positions of particles
-    y (array): y positions of particles
-    z (array): z positions of particles
-    verbosity (int): level of chattiness, 0 is none, anything above is printy print print
-    '''
-    mass, x, y, z = snapshot['mass'], snapshot['x'], snapshot['y'], snapshot['z']
-    sigma_x = np.sqrt(np.sum(mass*(x**2)))/np.sqrt(np.sum(mass))
-    sigma_y = np.sqrt(np.sum(mass*(y**2)))/np.sqrt(np.sum(mass))
-    sigma_z = np.sqrt(np.sum(mass*(z**2)))/np.sqrt(np.sum(mass))
-    #computing the roundness metric
-    roundness = sigma_z/(np.sqrt(sigma_x*sigma_y))
-    #in genel et al 2015, they say roundness < 0.55 = flat, while roundness > 0.9 = round
-    print('roundness < 0.55 = flat, while roundness > 0.9 = round')
-    return roundness
-
-def compute_rotation_metric(dat, halfmass_radius):
-    #rotation metric from Sales et al 2010, yoinked from mordor paper
-    R = halfmass_radius*3
-    top = np.sum(dat['mass'][dat['r']<R]*\
-                 (dat['jz'][dat['r']<R]/dat['rxy'][dat['r']<R])**2)
-    bottom = np.sum(dat['mass'][dat['r']<R]*np.sum(dat['vel'][dat['r']<R]**2, axis=1))
-    return top/bottom
-
-#using disky, bulge subpops to make estimate of disk scale length, scale height, hernquist scale length, mass fraction
-#do these look fine? should I just drop the prefactors (like .25/(pi a^2) and just assume that rho covers it?)
-def hernquist_bulge_log(R, herna, rho0):
-    return np.log10(herna**4/(2.0*np.pi*R)*(R+herna)**(-3.0)) + rho0
-
-def exponential_disk_log(R, a, rho0):
-    return np.log10(0.25/(np.pi*a*a) * np.exp(-R/a)) + rho0
-
-def disk_z_log(z, h, rho0):
-    sh = 1.0/np.cosh(z/h)
-    return np.log10(0.25/(np.pi*h) * sh * sh) + rho0
-
-def disk_bulge_xyz_log(rr, a, h, herna, Mfac, rho0):
-    '''Disk + hernquist bulge density profile
-    rr array (N): galactocentric spherical R coords
-    a (float): Disk scale radius
-    h (float): Disk scale height
-    herna (float): Hernquist scale length
-    Mfac (float): Mass fraction in disk
-    '''
-    x = np.sqrt(rr/3)
-    y = np.sqrt(rr/3)
-    z = np.sqrt(rr/3)
-    R = np.sqrt(x**2 + y**2)
-    sh = 1.0/np.cosh(z/h)
-    d1 = 0.25*Mfac/(np.pi*a*a*h) * np.exp(-R/a) * sh * sh
-    d2 = (1-Mfac)*herna**4/(2.0*np.pi*rr)*(rr+herna)**(-3.0)
-    return np.log10(d1 + d2) + rho0;
-
-## could do like z being integrated quantity, s
-def density_residual(theta, xyz_array, real_density):
-    '''feed in Nx3 array of xyz coords, corresponding to the bins for the density estimation.
-    along with the real density in these bins. Theta here is the parameters for the disk_bulge_xyz function, 
-    i.e. a, h, herna, Mfac  -> scale length, scale height, hernquist scale length, mass fraction in disk'''
-    predicted_density = disk_bulge_xyz_log(xyz_array, *theta)
-    residual = predicted_density - real_density
-    print(np.sqrt(np.sum(residual**2)))
-    return np.sqrt(np.sum(residual**2))
-
-def j_vcirc(dat):
-    big_G = 4.3*10**(-6) #kpc km^2 s^-2 Msol^-1
-    #total E = - G M / 2 r, vcirc = sqrt(G M / r) -> L = r vcirc = r sqrt(G Menc / r) 
-    # r = - G Menc / 2 E -> L = G menc / (sqrt(-2E))
-    #potential = G Menc / r
-    # Menc = grav_potential * r / G (mass enclosed includes dark matter!)
-    menc = dat['phi']*np.sqrt(dat['x']**2+dat['y']**2+dat['z']**2) / big_G
-    #this is sort of a weird hybrid, getting mass enclosed from the grav potential 
-    # and then usinf the cylindrical radius in the Vcirc
-    vcirc = np.sqrt(big_G * menc / np.sqrt(dat['x']**2+dat['y']**2))
-    L = vcirc * np.sqrt(dat['x']**2+dat['y']**2)
-    return L
-def j_circ_func(dat, bins=25, smoothing_size = 3, verbose=3):
-    #fitting a curve to the max Lz in each energy bin, following lead of lane and bovy 2024
-    #smoothing the curve to get rid of wonky bumps
-    lz_max, ebins, num = stats.binned_statistic(dat['phi']+dat['ke'], dat['jz'], statistic='max', bins=bins)
-    energies = dat['phi']+dat['ke']
-    smoothed_lz_max = uniform_filter1d(lz_max, size=smoothing_size, mode='nearest') #smoothing this out
-    j_circs = np.interp(energies, ebins[:-1]+(ebins[1]-ebins[0])/2, smoothed_lz_max)
-    if verbose > 0:
-        plt.figure()
-        plt.scatter(energies, dat['jz'], s=.1, c='k')
-        plt.scatter(ebins[:-1]+(ebins[1]-ebins[0])/2, smoothed_lz_max, c='r')
-        plt.scatter(energies, j_circs, c='b', s=.1)
-        plt.xlabel('Energy')
-        plt.ylabel('Jzcirc')
-    return j_circs
-
-#%%
-
-#%%
 #ok box 0 seems to be in box_0/box_0 ....?
-box = 999      #which simulation is used [0,1023] ---- 999 is beautiful boxy-peanut bulge! + spiral!
+box = 529    #previously did 999 thru the beef
+#529 is BEAUTIFUL
+#which simulation is used [0,1023] ---- 999 is beautiful boxy-peanut bulge! + spiral!
 #23 is suuuper warped and ends up being round label, 28 is a bit warped, 32 is basically all bulge and tiny disk
 #91 and 15 is no disk. 5 is nice, 672 is supre nice n disky. 537 is big bulge. 99 wack
 snap = 90     #which snapshot 90 -> z=0; will work up to z~1 as written
 part_type = 4 #which particle type to calculate the density
-h = .6909     #reduced hubble constant (do not change)
+#553, 555 don't have enough mass for MW-mass galaxies
 #%%
 #read in our snapshot
 dat, extra = load_zoom_particle_data_pynbody(snap_path, group_path, box,
                                               snap, part_type, verbose=3)
-pynbody.analysis.center(dat, mode='pot')
-dat.physical_units()
-half_mass_radius, hm_idx = half_mass(dat, verbosity = 3)
-if half_mass_radius > 5:
-    pynbody.analysis.faceon(dat, disk_size = half_mass_radius) #rotate to centered, face-on
-else:   
-    pynbody.analysis.faceon(dat, disk_size = 8)
+if dat:
+    pynbody.analysis.center(dat, mode='pot')
+    dat.physical_units()
+    half_mass_radius, hm_idx = half_mass(dat, verbosity = 3)
+    if half_mass_radius > 5:
+        pynbody.analysis.faceon(dat, disk_size = half_mass_radius) #rotate to centered, face-on
+    else:   
+        pynbody.analysis.faceon(dat, disk_size = 8)
+#%%
+#dd, d = load_zoom_particle_data(snap_path, group_path, box, snap, part_type, key_list=['Masses','Coordinates'])
+dd = load_particle_data(f'{snap_path}/box_{box}/snap_{snap:03}.hdf5', ['Coordinates'], part_type)
+grp = grp_cat = load_group_data(f'{group_path}/box_{box}/fof_subhalo_tab_{snap:03}.hdf5', ['GroupLenType', 'GroupFirstSub', 'GroupNsubs', 'GroupMassType', 'GroupPos', 'SubhaloLenType', 'SubhaloGrNr'])
+np.sum(grp['GroupMassType'],axis=1) * 1e10 / .69, \
+np.unique((np.sum(grp['GroupMassType'], axis=1) * 1e10 / .69 > 7e11) & (np.sum(grp['GroupMassType'],axis=1) * 1e10 / .69 < 2.5e12)),\
+np.max((np.sum(grp['GroupMassType'],axis=1) * 1e10 / .6909)/1e11)
 #%%
 #check if it is disky
 print(compute_roundness_metric(dat))
+if compute_roundness_metric(dat) < 0.55:
+    galaxy_type_round = 'disky'
+else:
+    galaxy_type_round = 'not disky'
 print('rotation metric, 0.4 and higher have high fraction of mass that rotates around GC', 
       compute_rotation_metric(dat, half_mass_radius))
+if compute_rotation_metric(dat, half_mass_radius) > 0.4:
+    galaxy_type_rot = 'disky'
+else:
+    galaxy_type_rot = 'not disky'
+print('galaxy in box ', box, ' is ', galaxy_type_round, ' by roundness metric', ' and ',
+      galaxy_type_rot, ' by rotation metric')
 print('computing Jcirc')
 jcirc = j_circ_func(dat, bins=25, smoothing_size = 3)
 #%%
-plt.scatter(dat['x'], dat['y'], s=.1, c='k')
 #%%
 #some nice plots to inspect
 disky = (np.sqrt(dat['x']**2 + dat['y']**2) < 30)&(np.abs(dat['z']) < 5) # just r, z cut
@@ -210,6 +107,23 @@ ax2[0].scatter(dat['x'][disk_mask], dat['y'][disk_mask], s=.01, c='k')
 ax2[0].set(xlabel='x (kpc)', ylabel='y (kpc)', title='Disk')
 ax2[1].scatter(dat['x'][disk_mask], dat['z'][disk_mask], s=.01, c='k')
 ax2[1].set(xlabel='x (kpc)', ylabel='z (kpc)', title='Disk')
+#%%
+by_eye_class = 'disky'
+#%%
+with open('DREAMS_check_roundness.txt', 'a') as f:
+    f.write('galaxy in box ')
+    f.write(str(box))
+    f.write(' is '),
+    f.write(galaxy_type_round)
+    f.write(' by roundness metric')
+    f.write(' and ')
+    f.write(galaxy_type_rot)
+    f.write(' by rotation metric')
+    f.write(' and by eye: ')
+    f.write(by_eye_class)
+    f.write("\n")
+#%%
+#%%
 #%%
 #fit the disk in r, z and hernquist in R
 mass_r, rbins, num = stats.binned_statistic(dat['rxy'][disk_mask],
@@ -274,7 +188,8 @@ rrcens = rrbins[:-1]+((rrbins[1]-rrbins[0])/2)
 shell_density = mass_rr/(4/3*np.pi*(rrbins[1:]**3-rrbins[:-1]**3))
 shell_density_smoo = np.log10(uniform_filter1d(shell_density, size=10, mode='nearest'))
 
-param_start = np.array([np.round(rexp[0],2), np.round(zexp[0],2), np.round(bulge[0],2),
+param_start = np.array([np.round(rexp[0],2), np.round(zexp[0],2), 
+                        np.round(bulge[0],2),
                       np.round(mr,2), np.round((rexp[1]+zexp[1])/2,2)])
 print('starting with these estimates:', param_start)
 sol = least_squares(fun = density_residual, x0 = param_start, args=(rrcens, shell_density_smoo),
@@ -283,14 +198,14 @@ print('find scale length, scale height, hernquist a, mfrac, rho0', sol['x'])
 # %%
 fig, (ax1) = plt.subplots(1,1, figsize=(8,6))
 ax1.scatter(rrcens, (shell_density_smoo), label='Data')
-ax1.plot(rrcens, disk_bulge_xyz_log(rrcens, sol['x'][0], sol['x'][1], 
+ax1.plot(rrcens, disk_bulge_R_log(rrcens, sol['x'][0], sol['x'][1], 
                                     sol['x'][2], sol['x'][3], sol['x'][4]), label='Fit', c='k')
 ax1.set(xlabel='R (kpc)', ylabel='log density')
 ax1.legend()
 
 fig, (ax1) = plt.subplots(1,1, figsize=(8,6))
 ax1.scatter(rrcens, 10**(shell_density_smoo), label='Data')
-ax1.plot(rrcens, 10**disk_bulge_xyz_log(rrcens, sol['x'][0], sol['x'][1], 
+ax1.plot(rrcens, 10**disk_bulge_R_log(rrcens, sol['x'][0], sol['x'][1], 
                                         sol['x'][2], sol['x'][3], sol['x'][4]), label='Fit', c='k')
 ax1.set(xlabel='R (kpc)', ylabel=' density')
 ax1.legend()
@@ -304,7 +219,9 @@ halo, extra = load_zoom_particle_data_pynbody(snap_path, group_path, box,
 pynbody.analysis.center(halo, mode='pot')
 halo.physical_units()
 rvir = pynbody.analysis.halo.virial_radius(halo).item()
+mvir = halo['mass'][halo['r']<= rvir].sum()
 print('virial radius:', rvir)
+print('virial mass (halo only):', mvir/1e12, ' * 1e12')
 #pynbody.plot.profile.rotation_curve(halo)
 p = pynbody.analysis.profile.Profile(halo, min=0.1, max=100)
 plt.plot(p['rbins'], p['v_circ'])
@@ -315,6 +232,7 @@ hernquist = round(sol['x'][2]/rvir,3)
 Mfac = round(sol['x'][3], 1)
 print(a, h, hernquist, Mfac)
 # %%
+#%%
 disk_basis_config = f"""
                 id         : cylinder
                 parameters:
@@ -349,7 +267,7 @@ symbasis = disk_basis.getBasis(xmin, xmax, numr, zmin, zmax, numz)
 
 ortho_disk = disk_basis.orthoCheck()
 # Make a table of worst orthgonal checks per harmonic order
-    
+#%%    
 form = '{:>4s}  {:>13s}'
 with open('DREAMS_ortho_disk_test_a{}_h{}_herna{}_f{}.txt'.format(a, h, hernquist, Mfac), 'w') as f:
     f.write("Disk ortho check")
@@ -369,9 +287,9 @@ R = np.linspace(xmin, xmax, numr)
 Z = np.linspace(zmin, zmax, numz)
 
 xv, yv = np.meshgrid(R, Z)
-fig, (ax) = plt.subplots(5, 12, figsize=(60, 25))
-for m in range(5):
-    for n in range(12):
+fig, (ax) = plt.subplots(8, 18, figsize=(5*18, 5*8))
+for m in range(8):
+    for n in range(18):
         # Tranpose for contourf
         ax[m][n].contourf(xv, yv, symbasis[m][n]['potential'].transpose())
         ax[m][n].set_xlabel('R')
@@ -380,41 +298,139 @@ for m in range(5):
         #fig.colorbar(cx, ax=ax[m][n])
 plt.savefig('/mnt/home/cfilion/DREAMS/plots/dreams_a{}_h{}_herna{}_f{}.jpeg'.format(a, h, hernquist, Mfac))
 #%%
-
 #%%
-empirical = symbasis.createFromArray(np.ones(dat['x'][disky]), dat['pos'][disky]/rvir, time=0.0)
-empirical_coefs = pyEXP.coefs.Coefs.makecoefs(empirical, 'disk')# %%
-empirical_volume = np.zeros((50, numr, numz))
-z_sice = np.linspace(zmin, zmax, 50)
+empirical = disk_basis.createFromArray(dat['mass'][disky]/mvir, 
+                                       dat['pos'][disky]/rvir, 
+                                       time=0.0)
+empirical_coefs = pyEXP.coefs.Coefs.makecoefs(empirical, 'disk')
+empirical_coefs.add(empirical)
+#%%
+coefs = empirical_coefs.getAllCoefs()
+power = empirical_coefs.Power()
+for m in range(power.shape[1]):
+    print('power in m =', m)
+    print(power[0,m])
+print('top 3 ms: ', np.arange(9)[np.argsort(power[0,:])[::-1]][0:3])
+#%%
+#%%
+vmin = np.minimum(np.min(np.real(coefs.T)[0,:,:]), np.min(np.imag(coefs.T)[0,:,:]))
+vmax = np.maximum(np.max(np.real(coefs.T)[0,:,:]), np.max(np.imag(coefs.T)[0,:,:]))
+fig, (ax1, ax2, ax3) = plt.subplots(1,3, figsize=(15,10))
+cb = ax1.imshow(np.real(coefs.T)[0,:,:], cmap='twilight', vmin=vmin, vmax=vmax, origin='lower')
+ax1.set(xlabel='m', ylabel='n', title='Real Coefs', xticks=range(9), yticks=range(18))
+fig.colorbar(cb, ax=ax1, fraction=.08)
+cb = ax2.imshow(np.imag(coefs.T)[0,:,:], cmap='twilight',vmin=vmin, vmax=vmax, origin='lower')
+ax2.set(xlabel='m', ylabel='n', title='Imaginary Coefs', xticks=range(9), yticks=range(18))
+fig.colorbar(cb, ax=ax2, fraction=0.08)
+cb = ax3.imshow(np.sqrt(np.imag(coefs.T)[0,:,:]**2 + np.real(coefs.T)[0,:,:]**2), 
+                cmap='magma', origin='lower')
+ax3.set(xlabel='m', ylabel='n', title='sqrt(imaginary^2 + real^2) Coefs', 
+        xticks=range(9), yticks=range(18))
+fig.colorbar(cb, ax=ax3, fraction=0.08)
+plt.subplots_adjust(wspace=0.5)
+plt.savefig('coefs.jpeg')
+#%%
+pmin  = [-xmax, -xmax, -zmax]
+pmax  = [xmax, xmax, -zmax]
+grid  = [  150,   150,   150]
+fields = pyEXP.field.FieldGenerator([0.0], pmin, pmax, grid)
+empirical_surfaces = fields.slices(disk_basis, empirical_coefs)
+#%%
+fig, ax = plt.subplots(1,2, figsize=(12,6))
+cb1 = ax[0].hist2d(dat['pos'][disky][:,0], dat['pos'][disky][:,1], 
+                   bins=200, norm=LogNorm(), cmap='magma')
+ax[0].set(xlim=(-35, 35),ylim=(-35, 35), xlabel='x (kpc)', ylabel='y (kpc)')
+cb3 = ax[1].imshow(empirical_surfaces[0.0]['dens'].T,  cmap='magma', 
+             origin='lower', extent=[-xmax, xmax, -xmax, xmax],norm=LogNorm(vmin=1,
+                                                vmax=np.max(cb1[0].flatten())))
+ax[1].set(xlabel='x (rvir)', ylabel='y (rvir)',xlim=(-.1, .1), ylim=(-.1, .1))
+fig.colorbar(cb1[3], ax=ax[0])
+fig.colorbar(cb3, ax=ax[1])
+plt.savefig('density_slice_xy.jpeg')
+#%%
+empirical_volume = np.zeros((150, 150, 200))
+z_sice = np.linspace(-zmax, zmax, 200)
 
 for i in range(len(z_sice)):
-    pmin  = [xmin, xmin, z_sice[i]]
+    pmin  = [-xmax, -xmax, z_sice[i]]
     pmax  = [xmax, xmax, z_sice[i]]
-    grid  = [  100,   100,   0]
-    
+    grid  = [  150,   150,   0]
     fields = pyEXP.field.FieldGenerator([0.0], pmin, pmax, grid)
+    empirical_surfaces = fields.slices(disk_basis, empirical_coefs)
+    empirical_volume[:,:,i] = empirical_surfaces[0.0]['dens']
 
-
-    fields = pyEXP.field.FieldGenerator([0.0], pmin, pmax, grid)
-    empirical_surfaces = fields.slices(empirical, empirical_coefs)
-    empirical_volume[i] = empirical_surfaces[0.0]['dens']
-
-fig, ax = plt.subplots(1, 2, figsize=(14, 4), sharey=True)
-
-cb1 = ax[0].hist2d(dat['pos'][disky][:,0], dat['pos'][disky][:,1], bins=600, norm=LogNorm(), cmap='twilight');
-cb3 = ax[2].imshow((np.mean(empirical_volume, axis=0)).T,  cmap='twilight', 
-             origin='lower', extent=[-25, 25, -25, 25], norm=LogNorm())
-
-
-
-
-ax[0].set_xlim(-25, 25)
-ax[0].set_ylim(-25, 25)
-
+cmap = plt.get_cmap('magma').copy()
+#cmap.set_under('black')
+#cmap.set_bad('black')
+fig, ax = plt.subplots(1,2, figsize=(12,2))
+cb1 = ax[0].hist2d(dat['pos'][disky][:,0], dat['pos'][disky][:,2], 
+                   bins=200, norm=LogNorm(), cmap=cmap)
+ax[0].set(xlim=(-35, 35),ylim=(-6, 6), xlabel='x (kpc)', ylabel='z (kpc)')
+cb3 = ax[1].imshow(np.sum(empirical_volume, axis=1).T,  cmap=cmap, 
+             origin='lower', extent=[-xmax, xmax, -zmax, zmax],
+             norm=LogNorm(vmin=1,vmax=np.max(cb1[0].flatten())))
+#cb3.cmap.set_under('k')
+#cb3.cmap.set_bad('k')
+ax[1].set(xlabel='x (rvir)', ylabel='z (rvir)',xlim=(-.1, .1))
 fig.colorbar(cb1[3], ax=ax[0])
-fig.colorbar(cb2, ax=ax[1])
+fig.colorbar(cb3, ax=ax[1])
+#%%
+cmap = plt.get_cmap('magma').copy()
+cmap.set_under('black')
+cmap.set_bad('black')
+fig, ax = plt.subplots(1,2, figsize=(13,6))
+cb1 = ax[0].hist2d(dat['pos'][disky][:,0], dat['pos'][disky][:,1], 
+                   bins=200, norm=LogNorm(), cmap=cmap)
+ax[0].set(xlim=(-35, 35),ylim=(-35, 35), xlabel='x (kpc)', ylabel='y (kpc)')
+cb3 = ax[1].imshow(np.sum(empirical_volume, axis=2).T,  cmap=cmap, 
+             origin='lower', extent=[-xmax, xmax, -xmax, xmax],
+             norm=LogNorm())
+#cb3.cmap.set_under('k')
+#cb3.cmap.set_bad('k')
+ax[1].set(xlabel='x (rvir)', ylabel='y (rvir)',xlim=(-.1, .1), ylim=(-.1,.1))
+fig.colorbar(cb1[3], ax=ax[0])
+fig.colorbar(cb3, ax=ax[1])
+#%%
+np.sum(empirical_volume, axis=1).shape
+#%%
+'''empirical_volume = np.zeros((150, 150, 200))
+z_sice = np.linspace(-zmax, zmax, 200)
 
-#plt.colorbar(img)
-ax[1].set_xlim(-150, 150)
-ax[1].set_ylim(-150, 150)
+for i in range(len(z_sice)):
+    pmin  = [-xmax, -xmax, z_sice[i]]
+    pmax  = [xmax, xmax, z_sice[i]]
+    grid  = [  150,   150,   0]
+    fields = pyEXP.field.FieldGenerator([0.0], pmin, pmax, grid)
+    empirical_surfaces = fields.slices(disk_basis, empirical_coefs)
+    empirical_volume[:,:,i] = empirical_surfaces[0.0]['dens']
+
+fig, ax = plt.subplots(1,2, figsize=(12,6))
+cb1 = ax[0].hist2d(dat['pos'][disky][:,0], dat['pos'][disky][:,1], 
+                   bins=200, norm=LogNorm(), cmap='magma')
+ax[0].set(xlim=(-35, 35),ylim=(-35, 35), xlabel='x (kpc)', ylabel='y (kpc)')
+cb3 = ax[1].imshow((np.mean(empirical_volume, axis=2)).T,  cmap='magma', 
+             origin='lower', extent=[-xmax, xmax, -xmax, xmax],norm=LogNorm(vmin=1,
+                                                vmax=np.max(cb1[0].flatten())))
+ax[1].set(xlabel='x (rvir)', ylabel='y (rvir)',xlim=(-.1, .1), ylim=(-.1, .1))
+fig.colorbar(cb1[3], ax=ax[0])
+fig.colorbar(cb3, ax=ax[1])
+
+fig, ax = plt.subplots(1,2, figsize=(12,2))
+cb1 = ax[0].hist2d(dat['pos'][disky][:,0], dat['pos'][disky][:,2], 
+                   bins=200, norm=LogNorm(), cmap='magma')
+ax[0].set(xlim=(-35, 35),ylim=(-6, 6), xlabel='x (kpc)', ylabel='z (kpc)')
+cb3 = ax[1].imshow(np.mean(empirical_volume, axis=1).T,  cmap='magma', 
+             origin='lower', extent=[-xmax, xmax, -zmax, zmax],
+             norm=LogNorm(vmin=1,vmax=np.max(cb1[0].flatten())))
+ax[1].set(xlabel='x (rvir)', ylabel='z (rvir)',xlim=(-.1, .1), ylim=(-zmax, zmax))
+fig.colorbar(cb1[3], ax=ax[0])
+fig.colorbar(cb3, ax=ax[1])
+# %%
+plt.imshow(empirical_volume[:,10,:].T,extent=[-xmax, xmax, -zmax, zmax],
+           cmap='magma', norm=LogNorm(vmin=1,vmax=np.max(cb1[0].flatten())))
+plt.ylim(-zmax, zmax)
+#plt.xlim(-.1, .1)
+empirical_volume.shape'''
+# %%
+h*rvir, zmax*rvir
 # %%

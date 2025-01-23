@@ -58,11 +58,12 @@ def get_MW_idx(cat):
     
     tot_masses = np.sum(masses,axis=1)
     mcut = (tot_masses > 7e11) & (tot_masses < 2.5e12)
-    
-    contamination = masses[:,2] / tot_masses
-    idx = np.argmin(contamination[mcut])
-    
-    mw_idx = np.arange(len(masses))[mcut][idx]
+    if True in np.unique(mcut):
+        contamination = masses[:,2] / tot_masses
+        idx = np.argmin(contamination[mcut])
+        mw_idx = np.arange(len(masses))[mcut][idx]
+    else:
+        mw_idx = None
     return mw_idx
 def load_group_data(path, keys):
     """
@@ -240,8 +241,13 @@ def load_zoom_particle_data(snap_path, group_path, box, snap, part_type, key_lis
     grp_cat = load_group_data(fof_path, ['GroupLenType', 'GroupFirstSub', 'GroupNsubs', 'GroupMassType', 'GroupPos', 'SubhaloLenType', 'SubhaloGrNr'])
 
     mw_idx = get_MW_idx(grp_cat) 
-    prt_cat, fof_cat = get_galaxy_data(part_cat, grp_cat, mw_idx)
-    return prt_cat, fof_cat
+    if mw_idx is None:
+        print('No haloes in MW mass range! Returning empty catalogs')
+        return
+    else:
+        prt_cat, fof_cat = get_galaxy_data(part_cat, grp_cat, mw_idx)
+        return prt_cat, fof_cat
+    return 
 
 def load_particle_data_alt(path, part_types):
     """
@@ -269,20 +275,24 @@ def load_particle_data_alt(path, part_types):
             part_types = [part_types]
         
         for pt in part_types:
-            keys = ofile[f'PartType{pt}'].keys()
-            for key in keys:
-                if pt == 1 and key == 'Masses':
-                    cat[f'PartType{pt}/{key}'] = np.ones(ofile['PartType1/ParticleIDs'].shape)*ofile['Header'].attrs['MassTable'][1]
-                else:
-                    if f'PartType{pt}/{key}' in ofile:
-                        cat[f'PartType{pt}/{key}'] = np.array(ofile[f'PartType{pt}/{key}'])
+            if pt <= 5:
+                keys = ofile[f'PartType{pt}'].keys()
+                for key in keys:
+                    if pt == 1 and key == 'Masses':
+                        cat[f'PartType{pt}/{key}'] = np.ones(ofile['PartType1/ParticleIDs'].shape)*ofile['Header'].attrs['MassTable'][1]
+                    else:
+                        if f'PartType{pt}/{key}' in ofile:
+                            cat[f'PartType{pt}/{key}'] = np.array(ofile[f'PartType{pt}/{key}'])
+            else:
+                print('Particle type does not exist, try an integer <= 5')
+                return
     return cat
 
 def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type, verbose=1):
     '''take in the snapshot path, the group path, the number box that you want
     the snapshot of, the snapshot number (i.e. what time, here z ~ 0 = 90), 
-    the particle type, and the list of keys you want to load
-                       0 - gas
+    the particle type. This will load all keys and port the data into pynbody with the correct cosmology
+                    0 - gas
                    1 - high res dark matter
                    2 - low res dark matter
                    3 - tracers (not used in DREAMS)
@@ -320,7 +330,9 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
                                          'GroupPos', 'SubhaloLenType', 'SubhaloGrNr', 'SubhaloPos'])
 
     mw_idx = get_MW_idx(grp_cat) 
-
+    if mw_idx is None:
+        print('No MW-like mass systems in this box!')
+        return None, None 
     name_map = pynbody.snapshot.namemapper.AdaptiveNameMapper('gadgethdf-name-mapping',return_all_format_names=False)
     offsets = np.sum(grp_cat['GroupLenType'][:mw_idx],axis=0)
     
@@ -335,13 +347,14 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
 
     soft = np.loadtxt(f'{snap_path}/box_{box}/aux_files/parameters-usedvalues',  dtype='str')
     soft_dict = {}
-    for i in range(len(soft)):
-        soft_dict[soft[i][0]] = soft[i][1]
-    comoving = float(soft_dict['SofteningComovingType'+str(pt)])
-    maxphys = float(soft_dict['SofteningMaxPhysType'+str(pt)])
-    a = 1.0 #bad to hardcode this in, but pynbody complains if I set a in the config
-    if comoving > maxphys/a:
-        comoving = maxphys/a
+    if pt <= 5:
+        for i in range(len(soft)):
+            soft_dict[soft[i][0]] = soft[i][1]
+        comoving = float(soft_dict['SofteningComovingType'+str(pt)])
+        maxphys = float(soft_dict['SofteningMaxPhysType'+str(pt)])
+        a = 1.0 #bad to hardcode this in, but pynbody complains if I set a in the config
+        if comoving > maxphys/a:
+            comoving = maxphys/a
         
     if verbose > 1:
         print('offsets', offsets)
@@ -351,6 +364,8 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         print('mw_idx, sub_start', mw_idx, sub_start)
 
     dat = load_particle_data_alt(path, pt)
+    if dat is None:
+        return None, None 
     new_group_cat = dict()
     for key in grp_cat:
         if 'Group' in key:
@@ -486,6 +501,7 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         #    return blackhole, new_group_cat
     else:
         print('invalid particle type')
-        return None
+        return None, None 
 
     return 
+# %%
