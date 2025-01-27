@@ -78,10 +78,10 @@ def hernquist_bulge_log(R, herna, rho0):
     #hernquist a parameter, rho0 parameter, returns log(density)
     return np.log10(herna**4/(2.0*np.pi*R)*(R+herna)**(-3.0)) + rho0
 
-def exponential_disk_log(R, a, rho0):
-    #exponential disk density profile, takes in cylindrical R
+def exponential_disk_log(r, a, rho0):
+    #exponential disk density profile, takes in cylindrical r
     #scale length and rho0
-    return np.log10(0.25/(np.pi*a*a) * np.exp(-R/a)) + rho0
+    return np.log10(0.25/(np.pi*a*a) * np.exp(-r/a)) + rho0
 
 def disk_z_log(z, h, rho0):
     #sech^2 vertical disk density profile, takes in z's and scale height, rho0
@@ -108,14 +108,65 @@ def disk_bulge_R_log(rr, a, h, herna, Mfac, rho0):
     d2 = (1-Mfac)*herna**4/(2.0*np.pi*rr)*(rr+herna)**(-3.0)
     return np.log10(d1 + d2) + rho0
 
+def compute_r_density_exp(dat, bins=100, smooth=True):
+    #compute the 2d surface density as a function of cylindrical radius
+    #pass in your snapshot (ideally with the proper selection of disk stars),
+    #number of desired bins, and whether or not you want smoothing
+    #returns density in rings and the ring centers
+    mass_r, rbins, num = stats.binned_statistic(dat['rxy'],
+                                    dat['mass'], statistic='sum', bins=bins)
+    #getting mass in rings
+    rcens = rbins[:-1]+((rbins[1]-rbins[0])/2)
+    ring_density = mass_r/(np.pi*rbins[1:]**2-np.pi*rbins[:-1]**2)
+    if smooth == True:
+        ring_density_ = np.log10(uniform_filter1d(ring_density, size=10, mode='nearest'))
+    return ring_density, rcens
+
+def compute_R_density_hern(dat, bins=100, smooth=True):
+    #compute 3d density as a function of spherical R
+    #pass in your snapshot (ideally with the proper selection of disk stars),
+    #number of desired bins, and whether or not you want smoothing
+    #returns density in shell and the shell centers
+    mass_rr, rrbins, num = stats.binned_statistic(dat['r'],
+                                   dat['mass'], statistic='sum', bins=bins)
+    #getting mass in shells
+    rrcens = rrbins[:-1]+((rrbins[1]-rrbins[0])/2)
+    shell_density = mass_rr/(4/3*np.pi*(rrbins[1:]**3-rrbins[:-1]**3))
+    if smooth == True:
+        shell_density = np.log10(uniform_filter1d(shell_density, size=10, mode='nearest'))
+    return shell_density, rrcens
+
+def compute_z_density_sinh(dat, bins=100, smooth=True, outer = 12, inner = 2):
+    #compute density as a function of z, averaged over 1 < cylindrical r < 11
+    #pass in your snapshot (ideally with the proper selection of disk stars),
+    #number of desired bins, and whether or not you want smoothing
+    #returns density in slices and the slice centers
+    mass_z, zbins, num = stats.binned_statistic((dat['z'][(dat['rxy']<outer)&(dat['rxy']>inner)]),
+                                    dat['mass'][(dat['rxy']<outer)&(dat['rxy']>inner)], 
+                                    statistic='sum', bins=bins)
+    #getting mass in rings
+    zcens = zbins[:-1]+((zbins[1]-zbins[0])/2)
+    z_density = mass_z/(np.pi*(outer**2 - inner**2) * (zbins[1:]-zbins[:-1])) 
+    if smooth == True:
+        z_density = np.log10(uniform_filter1d(z_density, size=10, mode='nearest'))
+    return z_density, zcens
 
 def density_residual(theta, R_array, real_density):
     '''feed in array of spherical radius coords, corresponding to the bins for the density estimation.
-    along with the real density in these bins. Theta here is the parameters for the disk_bulge_xyz function, 
+    along with the real density in these bins. Theta here is the parameters for the disk_bulge_R_log function, 
     i.e. a, h, herna, Mfac  -> scale length, scale height, hernquist scale length, mass fraction in disk'''
     predicted_density = disk_bulge_R_log(R_array, *theta)
     residual = predicted_density - real_density
-    print(np.sqrt(np.sum(residual**2)))
+    #print(np.sqrt(np.sum(residual**2)))
+    return np.sqrt(np.sum(residual**2))
+
+def density_residual_nodisk(theta, R_array, real_density):
+    '''feed in array of spherical radius coords, corresponding to the bins for the density estimation.
+    along with the real density in these bins. Theta here is the parameters for the hernquist_bulge_log function, 
+    i.e. herna, rho0  -> hernquist scale length, density at r=0'''
+    predicted_density = hernquist_bulge_log(R_array, *theta)
+    residual = predicted_density - real_density
+    #print(np.sqrt(np.sum(residual**2)))
     return np.sqrt(np.sum(residual**2))
 
 def j_vcirc(dat):
