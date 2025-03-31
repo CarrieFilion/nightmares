@@ -42,7 +42,7 @@ def load_particle_data(path, keys, part_types):
                     if f'PartType{pt}/{key}' in ofile:
                         cat[f'PartType{pt}/{key}'] = np.array(ofile[f'PartType{pt}/{key}'])
     return cat
-def get_MW_idx(cat):
+def get_MW_idx(cat, model):
     """
     Selects the corrent MW-mass galaxy from each simulation given the group catalog.
     This function only works for z~0
@@ -57,7 +57,12 @@ def get_MW_idx(cat):
     masses = cat['GroupMassType'] * 1e10 / h
     
     tot_masses = np.sum(masses,axis=1)
-    mcut = (tot_masses > 7e11) & (tot_masses < 2.5e12)
+    if model == 'CDM':
+        mcut = (tot_masses > 5e11) & (tot_masses < 2.5e12)
+    elif model == 'WDM':
+        mcut = (tot_masses > 7e11) & (tot_masses < 2.5e12)
+    else:
+        print('no galaxies with this model yet!')
     if True in np.unique(mcut):
         contamination = masses[:,2] / tot_masses
         idx = np.argmin(contamination[mcut])
@@ -238,9 +243,11 @@ def load_zoom_particle_data(snap_path, group_path, box, snap, part_type, key_lis
     part_cat = load_particle_data(path, key_list, part_type)
 
     fof_path = f'{group_path}/box_{box}/fof_subhalo_tab_{snap:03}.hdf5'
-    grp_cat = load_group_data(fof_path, ['GroupLenType', 'GroupFirstSub', 'GroupNsubs', 'GroupMassType', 'GroupPos', 'SubhaloLenType', 'SubhaloGrNr'])
-
-    mw_idx = get_MW_idx(grp_cat) 
+    grp_cat = load_group_data(fof_path, ['GroupLenType', 'GroupFirstSub', 'GroupNsubs', 
+                                         'GroupMassType', 'GroupPos', 'SubhaloLenType', 'SubhaloGrNr',
+                                         'SubhaloHalfmassRadType', 'SubhaloHalfmassRad'])
+    model = group_path.split('/')[-4]
+    mw_idx = get_MW_idx(grp_cat, model) 
     if mw_idx is None:
         print('No haloes in MW mass range! Returning empty catalogs')
         return
@@ -288,7 +295,7 @@ def load_particle_data_alt(path, part_types):
                 return
     return cat
 
-def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type, verbose=1):
+def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type, verbosity=1):
     '''take in the snapshot path, the group path, the number box that you want
     the snapshot of, the snapshot number (i.e. what time, here z ~ 0 = 90), 
     the particle type. This will load all keys and port the data into pynbody with the correct cosmology
@@ -304,6 +311,8 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
 
     if snap==90:
         #read in the IC file that has the cosmological parameters, update the particle reader with right cosmology
+        #while the below is loading in CDM parameters, there is this info in WDM,  so I think no harm in doing this each time
+        #need to reconsider once ADM etc are run
         param_info = np.loadtxt(f'{snap_path}/box_{box}/aux_files/ics_config.txt',  dtype='str', skiprows=20, max_rows=6)
         param_dic = {}
         for i in range(len(param_info)):
@@ -315,6 +324,7 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         pynbody.config['omegaB0'] = float(param_dic['Omega_b'])
         pynbody.config['sigma8'] = float(param_dic['sigma_8'])
         pynbody.config['ns'] = float(param_dic['nspec'])
+        pynbody.config['a'] = 1.0
         pynbody.units.a = 1.0
         pynbody.units.h = float(param_dic['H0'])/100
 
@@ -327,9 +337,10 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
     path = f'{snap_path}/box_{box}/snap_{snap:03}.hdf5'
     fof_path = f'{group_path}/box_{box}/fof_subhalo_tab_{snap:03}.hdf5'
     grp_cat = load_group_data(fof_path, ['GroupLenType', 'GroupFirstSub', 'GroupNsubs', 'GroupMassType', \
-                                         'GroupPos', 'SubhaloLenType', 'SubhaloGrNr', 'SubhaloPos'])
-
-    mw_idx = get_MW_idx(grp_cat) 
+                                         'GroupPos', 'SubhaloLenType', 'SubhaloGrNr', 'SubhaloPos',
+                                         'SubhaloHalfmassRadType', 'SubhaloHalfmassRad'])
+    model = group_path.split('/')[-4]
+    mw_idx = get_MW_idx(grp_cat, model) 
     if mw_idx is None:
         print('No MW-like mass systems in this box!')
         return None, None 
@@ -356,7 +367,7 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         if comoving > maxphys/a:
             comoving = maxphys/a
         
-    if verbose > 1:
+    if verbosity > 0:
         print('offsets', offsets)
         print('sub_start', sub_start)
         print('nsubs', nsubs)
@@ -372,7 +383,7 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
             new_group_cat[key] = grp_cat[key][mw_idx]
         else:
             new_group_cat[key] = grp_cat[key][sub_start:sub_start+nsubs]
-    if verbose > 1:
+    if verbosity > 0:
         print('-----------------')
         print('newgroupcat grouppos, subhalopos', new_group_cat['GroupPos'], new_group_cat['SubhaloPos'])
 
