@@ -20,6 +20,8 @@ from scipy.optimize import curve_fit, least_squares
 ####
 #### some nice functions to do analysis of our DREAMS disks!
 ####
+
+# ---- do I want to change to log10?
 def sech2(x):
     return 1/np.cosh(x)**2
 

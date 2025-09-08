@@ -11,6 +11,7 @@ h = .6909     #reduced hubble constant (do not change)
 #%%
 def load_particle_data(path, keys, part_types):
     """
+    this is original from Jonah
     Read particle data from the DREAMS simulations
     
     Inputs
@@ -258,6 +259,7 @@ def load_zoom_particle_data(snap_path, group_path, box, snap, part_type, key_lis
 
 def load_particle_data_alt(path, part_types):
     """
+    revised from original, will use all keys instead of passing in subset 
     Read particle data from the DREAMS simulations
     
     Inputs
@@ -295,7 +297,7 @@ def load_particle_data_alt(path, part_types):
                 return
     return cat
 
-def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type, verbosity=1):
+def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,  subhaloes = False, verbosity=1):
     '''take in the snapshot path, the group path, the number box that you want
     the snapshot of, the snapshot number (i.e. what time, here z ~ 0 = 90), 
     the particle type. This will load all keys and port the data into pynbody with the correct cosmology
@@ -305,55 +307,132 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
                    3 - tracers (not used in DREAMS)
                    4 - stars
                    5 - black holes
-    this is not currently set up to work with z > 0! 
-    note - always removing subhaloes
+    pass in whether or not you want to load subhaloes (no subhaloes = False, default)
     '''
+    #load in to find scale factor:
+    path = f'{snap_path}/box_{box}/snap_{snap:03}.hdf5'
+    check = h5py.File(path)
+    a = 1/(check['Header'].attrs['Redshift']+1)
+    check.close()
+    #read in the IC file that has the cosmological parameters, update the particle reader with right cosmology
+    #while the below is loading in CDM parameters, there is this info in WDM,  so I think no harm in doing this each time
+    #need to reconsider once ADM etc are run
+    param_info = np.loadtxt(f'{snap_path}/box_{box}/aux_files/ics_config.txt',  dtype='str', skiprows=20, max_rows=6)
+    param_dic = {}
+    for i in range(len(param_info)):
+        param_dic[param_info[i][0]] = param_info[i][2]
+    
+    pynbody.config['omegaM0'] = float(param_dic['Omega_m'])
+    pynbody.config['omegaL0'] = float(param_dic['Omega_L'])
+    pynbody.config['h'] = float(param_dic['H0'])/100 #should be .6909, but file gives 69.09
+    pynbody.config['omegaB0'] = float(param_dic['Omega_b'])
+    pynbody.config['sigma8'] = float(param_dic['sigma_8'])
+    pynbody.config['ns'] = float(param_dic['nspec'])
+    pynbody.config['a'] = a
+    pynbody.units.a = a
+    pynbody.units.h = float(param_dic['H0'])/100
 
-    if snap==90:
-        #read in the IC file that has the cosmological parameters, update the particle reader with right cosmology
-        #while the below is loading in CDM parameters, there is this info in WDM,  so I think no harm in doing this each time
-        #need to reconsider once ADM etc are run
-        param_info = np.loadtxt(f'{snap_path}/box_{box}/aux_files/ics_config.txt',  dtype='str', skiprows=20, max_rows=6)
-        param_dic = {}
-        for i in range(len(param_info)):
-            param_dic[param_info[i][0]] = param_info[i][2]
-        
-        pynbody.config['omegaM0'] = float(param_dic['Omega_m'])
-        pynbody.config['omegaL0'] = float(param_dic['Omega_L'])
-        pynbody.config['h'] = float(param_dic['H0'])/100 #should be .6909, but file gives 69.09
-        pynbody.config['omegaB0'] = float(param_dic['Omega_b'])
-        pynbody.config['sigma8'] = float(param_dic['sigma_8'])
-        pynbody.config['ns'] = float(param_dic['nspec'])
-        pynbody.config['a'] = 1.0
-        pynbody.units.a = 1.0
-        pynbody.units.h = float(param_dic['H0'])/100
-
-    else:
-        print('not z = 0 - need to revise!')
-        return None
     print('loading in ')
 
-
-    path = f'{snap_path}/box_{box}/snap_{snap:03}.hdf5'
     fof_path = f'{group_path}/box_{box}/fof_subhalo_tab_{snap:03}.hdf5'
     grp_cat = load_group_data(fof_path, ['GroupLenType', 'GroupFirstSub', 'GroupNsubs', 'GroupMassType', \
+                                            'GroupPos', 'SubhaloLenType', 'SubhaloGrNr', 'SubhaloPos',
+                                            'SubhaloHalfmassRadType', 'SubhaloHalfmassRad'])
+    model = group_path.split('/')[-4]
+    
+    name_map = pynbody.snapshot.namemapper.AdaptiveNameMapper('gadgethdf-name-mapping',return_all_format_names=False)
+    if snap == 90:
+        print('snap is z = 0 -> loading in the MW-mass halo')
+        mw_idx = get_MW_idx(grp_cat, model) 
+        if mw_idx is None:
+            print('No MW-like mass systems in this box!')
+            return None, None 
+        offsets = np.sum(grp_cat['GroupLenType'][:mw_idx],axis=0)
+        sub_start = grp_cat['GroupFirstSub'][mw_idx] #new edit
+        if subhaloes == False:
+            print('removing subhaloes')
+            num_parts = grp_cat['SubhaloLenType'][grp_cat['GroupFirstSub'][mw_idx]] #want sub_idx = 0 in Jonah's code
+            nsubs = 1
+        else:
+            print('keeping all subhaloes')
+            num_parts = grp_cat['GroupLenType'][mw_idx]
+            nsubs = grp_cat['GroupNsubs'][mw_idx]
+
+    
+    if snap != 90:
+        print('snap is z > 0 -> not positive this works!')
+        #get MW-mass halo from z = 0
+        print('reading in z = 0 first to get halo...')
+        fof_path90 = f'{group_path}/box_{box}/fof_subhalo_tab_{90:03}.hdf5'
+        grp_cat90 = load_group_data(fof_path90, ['GroupLenType', 'GroupFirstSub', 'GroupNsubs', 'GroupMassType', \
                                          'GroupPos', 'SubhaloLenType', 'SubhaloGrNr', 'SubhaloPos',
                                          'SubhaloHalfmassRadType', 'SubhaloHalfmassRad'])
-    model = group_path.split('/')[-4]
-    mw_idx = get_MW_idx(grp_cat, model) 
-    if mw_idx is None:
-        print('No MW-like mass systems in this box!')
-        return None, None 
-    name_map = pynbody.snapshot.namemapper.AdaptiveNameMapper('gadgethdf-name-mapping',return_all_format_names=False)
-    offsets = np.sum(grp_cat['GroupLenType'][:mw_idx],axis=0)
-    
-    print('removing subhaloes')
-    num_parts = grp_cat['SubhaloLenType'][grp_cat['GroupFirstSub'][mw_idx]] #want sub_idx = 0 in Jonah's code
-    nsubs = 1
-    sub_start = grp_cat['GroupFirstSub'][mw_idx] #new edit
+        model = group_path.split('/')[-4]
+        mw_idx = get_MW_idx(grp_cat90, model) 
+        #can't use the z = 0 MW mass idx finder here - need to identify the MW-mass halo at z = 0
+        #and then trace it thru time. Will need to load the merger tree to identify the correct halo
+        tree_cat = h5py.File(group_path+'/box_'+str(int(box))+'/tree_extended.hdf5')
+        nnodes = len(tree_cat['SubhaloID'])
+        #initialize the search by finding the target halo in the tree
+        target_cut = np.isin(tree_cat['SubhaloGrNr'], mw_idx) & np.isin(tree_cat['SnapNum'], 90)
+        target  = tree_cat['FirstSubhaloInFOFGroupID'][target_cut][0]
+        target_idx = tree_cat['SubhaloID'] == target
+        start = tree_cat['MainLeafProgenitorID'][target_idx]
+        start_idx = np.arange(nnodes)[tree_cat['SubhaloID'] == start][0]
+        start_snap = tree_cat['SnapNum'][start_idx]
+        next_ID = tree_cat['DescendantID'][start_idx]
+        next_idx = np.arange(nnodes)[tree_cat['SubhaloID'] == next_ID][0] 
+        grp_start_offset_over_time = dict()
+        grp_idx_over_time = dict()
+        grp_start_offset_over_time[start_snap] = np.sum(grp_cat90['GroupLenType'][:mw_idx], axis=0)
+        grp_idx_over_time[start_snap] = mw_idx
+        if verbosity > 0:
+            print('start snap', start_snap)
+            print('zero start offset', grp_start_offset_over_time[start_snap])
+        #loop through to identify the location of the first subhalo in the group,
+        #this is the massive central galaxy that we want to use
+        group_first_sub_over_time = dict()
+        group_first_sub_over_time[start_snap] = tree_cat['GroupFirstSub'][start_idx]
+        grp_len_type_over_time = dict()
+        grp_len_type_over_time[start_snap] = tree_cat['GroupLenType'][start_idx]
+        grp_nsubs_over_time = dict()
+        grp_nsubs_over_time[start_snap] = tree_cat['GroupNsubs'][start_idx]
+        while next_ID != -1:
+            this_snap = tree_cat['SnapNum'][next_idx]
+            next_ID = tree_cat['DescendantID'][next_idx]
+            haloiddxxx = tree_cat['SubhaloGrNr'][next_idx]
+            fof_path2 = f'{group_path}/box_{box}/fof_subhalo_tab_{this_snap:03}.hdf5'
+            grp_cat2 = load_group_data(fof_path2, ['GroupLenType', 'GroupFirstSub', 'GroupNsubs', 'GroupMassType', \
+                                        'GroupPos', 'SubhaloLenType', 'SubhaloGrNr', 'SubhaloPos',
+                                        'SubhaloHalfmassRadType', 'SubhaloHalfmassRad'])
+            grp_idx_over_time[this_snap] = haloiddxxx
+            grp_start_offset_over_time[this_snap] = np.sum(grp_cat2['GroupLenType'][:haloiddxxx], axis=0)
+            group_first_sub_over_time[this_snap] = tree_cat['GroupFirstSub'][next_idx]
+            grp_len_type_over_time[this_snap] = tree_cat['GroupLenType'][next_idx]
+            grp_nsubs_over_time[this_snap] = tree_cat['GroupNsubs'][next_idx]
+            if next_ID == -1:
+                break
+            next_idx = np.arange(nnodes)[tree_cat['SubhaloID'] == next_ID][0]
+            if verbosity > 0:
+                print('this snap', this_snap)
+                print('group number', haloiddxxx)
+                print('grp len type over time', grp_len_type_over_time[this_snap])
+                print('comp to this snap:', grp_cat2['GroupLenType'][haloiddxxx])
 
 
-    
+        offsets = grp_start_offset_over_time[snap]
+        sub_start = group_first_sub_over_time[snap] #new edit
+        if subhaloes == False:
+            print('removing subhaloes')
+            num_parts = grp_cat['SubhaloLenType'][group_first_sub_over_time[snap]] #want sub_idx = 0 in Jonah's code
+            nsubs = 1
+            mw_idx = grp_idx_over_time[snap]
+        else:
+            print('keeping all subhaloes')
+            num_parts = grp_len_type_over_time[snap]
+            nsubs = grp_nsubs_over_time[snap]
+            mw_idx = grp_idx_over_time[snap]
+        
     pt = int(part_type)
 
     soft = np.loadtxt(f'{snap_path}/box_{box}/aux_files/parameters-usedvalues',  dtype='str')
@@ -363,7 +442,7 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
             soft_dict[soft[i][0]] = soft[i][1]
         comoving = float(soft_dict['SofteningComovingType'+str(pt)])
         maxphys = float(soft_dict['SofteningMaxPhysType'+str(pt)])
-        a = 1.0 #bad to hardcode this in, but pynbody complains if I set a in the config
+        #####a = 1.0 #bad to hardcode this in, but pynbody complains if I set a in the config
         if comoving > maxphys/a:
             comoving = maxphys/a
         
@@ -380,17 +459,19 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
     new_group_cat = dict()
     for key in grp_cat:
         if 'Group' in key:
-            new_group_cat[key] = grp_cat[key][mw_idx]
+            new_group_cat[key] = grp_cat[key][sub_start]
         else:
             new_group_cat[key] = grp_cat[key][sub_start:sub_start+nsubs]
     if verbosity > 0:
         print('-----------------')
         print('newgroupcat grouppos, subhalopos', new_group_cat['GroupPos'], new_group_cat['SubhaloPos'])
+        print('-----------------')
+        print('recentering on zeroeth subhalo, position: ', new_group_cat['SubhaloPos'][0,:])
 
-    dat[f'PartType{pt}/Coordinates'] = dat[f'PartType{pt}/Coordinates'] - new_group_cat['SubhaloPos']
+    dat[f'PartType{pt}/Coordinates'] = dat[f'PartType{pt}/Coordinates'] - new_group_cat['SubhaloPos'][0,:]
     unit_dict = {'BirthPos': units.kpc * units.h**-1,
             'BirthVel': units.a**1/2 * units.km * units.s**-1,
-            'Coordinates': units.kpc * units.h**-1,
+            'Coordinates': units.kpc *units.a * units.h**-1,
             'GFM_InitialMass': 1e10 * units.Msol * units.h**-1,
             'GFM_Metallicity': units.Unit(1),
             'GFM_Metals': units.Unit(1),
@@ -400,13 +481,13 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
             'Masses': 1e10 * units.Msol * units.h**-1,
             'ParticleIDs': units.Unit(1),
             'Potential': units.km**2 * units.s**-2 * units.a**-1,
-            'SubfindDMDensity': 1e10 * units.Msol * units.h**2 * units.kpc**-3,
-            'SubfindDensity': 1e10 * units.Msol * units.h**2 * units.kpc**-3,
-            'SubfindHsml': units.kpc * units.h**-1,
+            'SubfindDMDensity': 1e10 * units.Msol * units.h**2 * units.kpc**-3*units.a**-3,
+            'SubfindDensity': 1e10 * units.Msol * units.h**2 * units.kpc**-3*units.a**-3,
+            'SubfindHsml': units.kpc * units.a * units.h**-1,
             'SubfindVelDisp': units.km * units.s**-1,
             'Velocities': units.km * units.a**1/2 * units.s**-1,
-            'CenterOfMass': units.kpc * units.h**-1,
-            'Density': 1e10 * units.Msol * units.h**2 * units.kpc**-3,
+            'CenterOfMass': units.kpc * units.a * units.h**-1,
+            'Density': 1e10 * units.Msol * units.h**2 * units.kpc**-3*units.a**-3,
             'ElectronAbundance': units.Unit(1),
             'GFM_AGNRadiation': units.erg * units.s**-1 * units.cm**-2 * 4 * np.pi,
             'GFM_CoolingRate': units.erg * units.s**-1 * units.cm**3,
@@ -417,7 +498,7 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
             'GFM_WindHostHaloMass': 1e10 * units.Msol * units.h**-1,
             'InternalEnergy': units.km**2 * units.s**-2,
             'MagneticField': units.h * units.a**-2 * 1e5 * units.Msol**1/2 * units.kpc**-1/2* units.km * units.s**-1 * units.kpc**-1,
-            'MagneticFieldDivergence': units.h**3 * units.a**-2 * 1e5 * units.Msol**1/2 * units.km * units.s**-1 * units.kpc**-5/2,
+            'MagneticFieldDivergence': units.h**3 * 1e5 * units.Msol**1/2 * units.km * units.a**-2 * units.s**-1 * units.kpc**-5/2 * units.a**-5/2,
             'NeutralHydrogenAbundance': units.Unit(1),
             'StarFormationRate': units.Msol * units.yr**-1,
             'InternalEnergy': units.km**2 * units.s**-2,
@@ -434,6 +515,7 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         gas.properties['omegaB0'] = float(param_dic['Omega_b'])
         gas.properties['sigma8'] = float(param_dic['sigma_8'])
         gas.properties['ns'] = float(param_dic['nspec'])
+        gas.properties['a'] = float(a)
         gas['eps'] = pynbody.array.SimArray([comoving], 'kpc', dtype='float64')
         for key in dat.keys():
             key = key.split('/')[1]
@@ -451,6 +533,7 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         dm.properties['omegaB0'] = float(param_dic['Omega_b'])
         dm.properties['sigma8'] = float(param_dic['sigma_8'])
         dm.properties['ns'] = float(param_dic['nspec'])
+        dm.properties['a'] = float(a)
         dm['eps'] = pynbody.array.SimArray([comoving], 'kpc', dtype='float64')
         with h5py.File(path) as ofile:
             dm['Masses'] = np.ones(ofile['PartType1/ParticleIDs'][offsets[pt]:offsets[pt]+num_parts[pt]].shape)*ofile['Header'].attrs['MassTable'][1]
@@ -474,6 +557,7 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         dm.properties['omegaB0'] = float(param_dic['Omega_b'])
         dm.properties['sigma8'] = float(param_dic['sigma_8'])
         dm.properties['ns'] = float(param_dic['nspec'])
+        dm.properties['a'] = float(a)
         dm['eps'] = pynbody.array.SimArray([comoving], 'kpc', dtype='float64')
         for key in dat.keys():
             key = key.split('/')[1]
@@ -493,6 +577,7 @@ def load_zoom_particle_data_pynbody(snap_path, group_path, box, snap, part_type,
         star.properties['omegaB0'] = float(param_dic['Omega_b'])
         star.properties['sigma8'] = float(param_dic['sigma_8'])
         star.properties['ns'] = float(param_dic['nspec'])
+        star.properties['a'] = float(a)
         star['eps'] = pynbody.array.SimArray([comoving], 'kpc', dtype='float64')
         for key in dat.keys():
             key = key.split('/')[1]

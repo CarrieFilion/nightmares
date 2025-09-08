@@ -28,8 +28,7 @@ from mpi4py import MPI
 pynbody.config['number_of_threads'] = 1 #attempting to limit this to just one thread
 model = 'CDM' #'WDM'  #'CDM' 
 sbnum = 'SB5' #SB4' #'SB5' 
-testing = False
-abundance_check = True
+testing = False #False
 fit_hern_basis = False
 snap_path = '/mnt/home/dreams/ceph/Sims/'+model+'/MW_zooms/'+sbnum
 group_path = '/mnt/home/dreams/ceph/FOF_Subfind/'+model+'/MW_zooms/'+sbnum+'/'
@@ -38,7 +37,7 @@ print_plots = False
 make_basis = True
 abundance_plots = False
 verbosity = 3
-os.chdir('/mnt/home/cfilion/ceph/DREAMS/CDM/')
+os.chdir('/mnt/home/cfilion/ceph/DREAMS/CDM_WDM/')
 #### fix floating issue with comma at end of names
 #%%
 #if __name__ == '__main__':
@@ -244,7 +243,7 @@ if __name__ == '__main__':
             if verbosity > 0:
                 print('starting with these estimates:', param_start)
             sol = least_squares(fun = density_residual, x0 = param_start, args=(rrcens, zzcens, mass_rz),
-                                bounds = (np.array([0.1, 0.01, 0, 0.01, .1]), np.array([15, 5, 5, 1, 500])))
+                                bounds = (np.array([0.1, 0.01, 0, 0.01, .1]), np.array([15, 5, 5, 1, 500])), loss='cauchy')
             if verbosity > 0:
                 print('find scale length, scale height, hernquist a, mfrac, rho0', sol['x'])
             if print_plots == True:
@@ -343,43 +342,42 @@ if __name__ == '__main__':
                 
                     f.write(str(len(dat)) + ' , ') #gotta write out number of stars in the box
 
-            if abundance_check == True:
-                mg_fe = abundance_solarscale_fe('Mg', dat[disky])
-                fe_h = abundance_solarscale_h('Fe', dat[disky])
-                r_slices = [0, 3, 6, 9, 12, 15]
-                z_slices = [-5, -2.5, 0, 2.5, 5]
-                for i in range(len(r_slices)-1):
-                    r_mask = (dat[disky]['rxy'] > r_slices[i]) & (dat[disky]['rxy'] < r_slices[i+1])
-                    if testing == False:
-                        with open('DREAMS_'+model+'_galaxy_stats.txt', 'a') as f:
-                            if r_slices[i+1] < 15:
-                                if len(dat[disky][r_mask]) > 10:
-                                    f.write(str(kurtosis(mg_fe[r_mask], fisher=True)) + ' , ')
-                                else:
-                                    f.write('0 , ')
-                            else:
-                                if len(dat[disky][r_mask]) > 10:
-                                    f.write(str(kurtosis(mg_fe[r_mask], fisher=True)) + '\n') #last line in row
-                                else:
-                                    f.write('0 \n')
-                    if abundance_plots == True:
-                        for j in range(len(z_slices)-1):
-                            z_mask = (dat[disky]['z'] > z_slices[j]) & (dat[disky]['z'] < z_slices[j+1])
-                            mask = r_mask & z_mask
-                            if len(dat[disky][mask]) > 10: 
-                                
-                                    plt.figure(figsize=(5,5))
-                                    plt.title('box '+str(box)+' r, z '+str(r_slices[i])+' to '+str(r_slices[i+1])+ \
-                                            ' and ' + str(z_slices[j]) + ' to '+str(z_slices[j+1]))
-                                    plt.scatter(fe_h[mask], mg_fe[mask], s=.01, c='k')
-                                    plt.xlim(-3,1.5)
-                                    plt.ylim(-.5,1.5)
-                                    plt.xlabel('[Fe/H]')
-                                    plt.ylabel('[Mg/Fe]')  
-            else:
+            mg_fe = abundance_solarscale_fe('Mg', dat[disky])
+            fe_h = abundance_solarscale_h('Fe', dat[disky])
+            r_slices = [0, 3, 6, 9, 12, 15]
+            z_slices = [-5, -2.5, 0, 2.5, 5]
+            for i in range(len(r_slices)-1):
+                r_mask = (dat[disky]['rxy'] > r_slices[i]) & (dat[disky]['rxy'] < r_slices[i+1]) & (dat[disky]['jz']/jcirc[disky]>0.5)
                 if testing == False:
                     with open('DREAMS_'+model+'_galaxy_stats.txt', 'a') as f:
-                        f.write('0 , 0 , 0 , 0 , 0 \n') 
+                        if r_slices[i+1] < 15:
+                            if len(dat[disky][r_mask]) > 10:
+                                f.write(str(kurtosis(mg_fe[r_mask], fisher=True)) + ' , ')
+                            else:
+                                f.write('0 , ')
+                        else:
+                            if len(dat[disky][r_mask]) > 10:
+                                f.write(str(kurtosis(mg_fe[r_mask], fisher=True)) + '\n') #last line in row
+                            else:
+                                f.write('0 \n')
+                if abundance_plots == True:
+                    for j in range(len(z_slices)-1):
+                        z_mask = (dat[disky]['z'] > z_slices[j]) & (dat[disky]['z'] < z_slices[j+1])
+                        mask = r_mask & z_mask
+                        if len(dat[disky][mask]) > 10: 
+                            
+                                plt.figure(figsize=(5,5))
+                                plt.title('box '+str(box)+' r, z '+str(r_slices[i])+' to '+str(r_slices[i+1])+ \
+                                        ' and ' + str(z_slices[j]) + ' to '+str(z_slices[j+1]))
+                                plt.scatter(fe_h[mask], mg_fe[mask], s=.01, c='k')
+                                plt.xlim(-3,1.5)
+                                plt.ylim(-.5,1.5)
+                                plt.xlabel('[Fe/H]')
+                                plt.ylabel('[Mg/Fe]')  
+                #else:
+                #    if testing == False:
+                #        with open('DREAMS_'+model+'_galaxy_stats.txt', 'a') as f:
+                #            f.write('0 , 0 , 0 , 0 , 0 \n') 
             if make_basis == True:
                 if (a > h) and (a > hernquist) and (half_mass_radius > 1):
                     print('making basis')
@@ -454,13 +452,14 @@ if __name__ == '__main__':
                     empirical_coefs.add(empirical)
                     coefs = empirical_coefs.getAllCoefs()
                     power = empirical_coefs.Power()
+                    empirical_coefs.WriteH5Coefs('/mnt/home/cfilion/ceph/DREAMS/CDM_WDM/{}_coefs2/DREAMS_coefs_box_{}'.format(model, box))
                     for m in range(power.shape[1]):
                         print('power in m =', m)
                         print(power[0,m])
                     print('top 3 ms: ', np.arange(9)[np.argsort(power[0,:])[::-1]][0:3])
 
-                    np.save('DREAMS_coefs_box_{}.npy'.format(box), coefs)
-                    np.save('DREAMS_power_box_{}.npy'.format(box), power)
+                    #np.save('/mnt/home/cfilion/ceph/DREAMS/CDM_WDM/{}_coefs/DREAMS_coefs_box_{}.npy'.format(model, box), coefs)
+                    np.save('/mnt/home/cfilion/ceph/DREAMS/CDM_WDM/{}_power/DREAMS_power_box_{}.npy'.format(model, box), power)
                 else:
                     print('not making basis')
         else:
@@ -479,7 +478,7 @@ if __name__ == '__main__':
             if verbosity > 0:
                 print('starting with these estimates:', param_start)
             sol = least_squares(fun = density_residual_nodisk, x0 = param_start, args=(rrcens, shell_density_smoo),
-                                bounds = (np.array([0.001, 0.1]), np.array([30, 500])))
+                                bounds = (np.array([0.001, 0.1]), np.array([30, 500])), loss='cauchy')
             if verbosity > 0:
                 print('find scale length, scale height, hernquist a, mfrac, rho0', sol['x'])
             if print_plots == True:
@@ -560,38 +559,38 @@ if __name__ == '__main__':
                             f.write(str(above) + ' , ' + str(below) + ' , ')
                 
                     f.write(str(len(dat)) + ' , ') #gotta write out number of stars in the box
-            if abundance_check == True:
-                mg_fe = abundance_solarscale_fe('Mg', dat[disky])
-                fe_h = abundance_solarscale_h('Fe', dat[disky])
-                r_slices = [0, 3, 6, 9, 12, 15]
-                z_slices = [-5, -2.5, 0, 2.5, 5]
-                for i in range(len(r_slices)-1):
-                    r_mask = (dat[disky]['rxy'] > r_slices[i]) & (dat[disky]['rxy'] < r_slices[i+1])
-                    if testing == False:
-                        with open('DREAMS_'+model+'_galaxy_stats.txt', 'a') as f:
-                            if r_slices[i+1] < 15:
-                                if len(dat[disky][r_mask]) > 10:
-                                    f.write(str(kurtosis(mg_fe[r_mask], fisher=True)) + ' , ')
-                                else:
-                                    f.write('0 , ')
+
+            mg_fe = abundance_solarscale_fe('Mg', dat[disky])
+            fe_h = abundance_solarscale_h('Fe', dat[disky])
+            r_slices = [0, 3, 6, 9, 12, 15]
+            z_slices = [-5, -2.5, 0, 2.5, 5]
+            for i in range(len(r_slices)-1):
+                r_mask = (dat[disky]['rxy'] > r_slices[i]) & (dat[disky]['rxy'] < r_slices[i+1]) & (dat[disky]['jz']/jcirc[disky]>0.5)
+                if testing == False:
+                    with open('DREAMS_'+model+'_galaxy_stats.txt', 'a') as f:
+                        if r_slices[i+1] < 15:
+                            if len(dat[disky][r_mask]) > 10:
+                                f.write(str(kurtosis(mg_fe[r_mask], fisher=True)) + ' , ')
                             else:
-                                if len(dat[disky][r_mask]) > 10:
-                                    f.write(str(kurtosis(mg_fe[r_mask], fisher=True)) + '\n') #last line in row
-                                else:
-                                    f.write('0 \n')
-                    if abundance_plots == True:
-                        for j in range(len(z_slices)-1):
-                            z_mask = (dat[disky]['z'] > z_slices[j]) & (dat[disky]['z'] < z_slices[j+1])
-                            mask = r_mask & z_mask
-                            if len(dat[disky][mask]) > 10: 
-                                    plt.figure(figsize=(5,5))
-                                    plt.title('box '+str(box)+' r, z '+str(r_slices[i])+' to '+str(r_slices[i+1])+ \
-                                            ' and ' + str(z_slices[j]) + ' to '+str(z_slices[j+1]))
-                                    plt.scatter(fe_h[mask], mg_fe[mask], s=.01, c='k')
-                                    plt.xlim(-3,1.5)
-                                    plt.ylim(-.5,1.5)
-                                    plt.xlabel('[Fe/H]')
-                                    plt.ylabel('[Mg/Fe]')  
+                                f.write('0 , ')
+                        else:
+                            if len(dat[disky][r_mask]) > 10:
+                                f.write(str(kurtosis(mg_fe[r_mask], fisher=True)) + '\n') #last line in row
+                            else:
+                                f.write('0 \n')
+                if abundance_plots == True:
+                    for j in range(len(z_slices)-1):
+                        z_mask = (dat[disky]['z'] > z_slices[j]) & (dat[disky]['z'] < z_slices[j+1])
+                        mask = r_mask & z_mask
+                        if len(dat[disky][mask]) > 10: 
+                                plt.figure(figsize=(5,5))
+                                plt.title('box '+str(box)+' r, z '+str(r_slices[i])+' to '+str(r_slices[i+1])+ \
+                                        ' and ' + str(z_slices[j]) + ' to '+str(z_slices[j+1]))
+                                plt.scatter(fe_h[mask], mg_fe[mask], s=.01, c='k')
+                                plt.xlim(-3,1.5)
+                                plt.ylim(-.5,1.5)
+                                plt.xlabel('[Fe/H]')
+                                plt.ylabel('[Mg/Fe]')  
             if fit_hern_basis == True:
 
                 print('making basis')
@@ -670,9 +669,10 @@ if __name__ == '__main__':
                     print('power in m =', m)
                     print(power[0,m])
                 print('top 3 ms: ', np.arange(9)[np.argsort(power[0,:])[::-1]][0:3])
+                empirical_coefs.WriteH5Coefs('/mnt/home/cfilion/ceph/DREAMS/CDM_WDM/{}_coefs/DREAMS_coefs_box_{}'.format(model, box))
 
-                np.save('DREAMS_coefs_box_{}.npy'.format(box), coefs)
-                np.save('DREAMS_power_box_{}.npy'.format(box), power)
+                #np.save('/mnt/home/cfilion/ceph/DREAMS/CDM_WDM/{}_coefs/DREAMS_coefs_box_{}.npy'.format(model, box), coefs)
+                np.save('/mnt/home/cfilion/ceph/DREAMS/CDM_WDM/{}_power/DREAMS_power_box_{}.npy'.format(model, box), power)
 
 
 
