@@ -70,10 +70,12 @@ def compute_roundness_metric(snapshot, verbosity=3):
 def compute_rotation_metric(dat, halfmass_radius):
     #rotation metric from Sales et al 2010, yoinked from mordor paper
     R = halfmass_radius*3
+    soft_r = np.where(dat['rxy'][dat['r']<R] == 0, 1e-3, dat['rxy'][dat['r']<R])
     top = np.sum(dat['mass'][dat['r']<R]*\
-                 (dat['jz'][dat['r']<R]/dat['rxy'][dat['r']<R])**2)
+                 (dat['jz'][dat['r']<R]/soft_r)**2)
     bottom = np.sum(dat['mass'][dat['r']<R]*np.sum(dat['vel'][dat['r']<R]**2, axis=1))
-    return top/bottom
+    soft_bottom = np.where(bottom == 0, 1e-3, bottom)
+    return top/soft_bottom
 
 #using disky, bulge subpops to make estimate of disk scale length, scale height, hernquist scale length, mass fraction
 #do these look fine? should I drop the prefactors (like .25/(pi a^2) and just assume that rho covers it?)
